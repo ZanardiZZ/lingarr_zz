@@ -26,6 +26,7 @@ public class TranslationJob
     private readonly ITranslationServiceFactory _translationServiceFactory;
     private readonly ITranslationRequestService _translationRequestService;
     private readonly ITranslationRequestEventService _eventService;
+    private readonly ISubtitlePostProcessingService _subtitlePostProcessingService;
 
     public TranslationJob(
         ILogger<TranslationJob> logger,
@@ -37,7 +38,8 @@ public class TranslationJob
         IStatisticsService statisticsService,
         ITranslationServiceFactory translationServiceFactory,
         ITranslationRequestService translationRequestService,
-        ITranslationRequestEventService eventService)
+        ITranslationRequestEventService eventService,
+        ISubtitlePostProcessingService subtitlePostProcessingService)
     {
         _logger = logger;
         _settings = settings;
@@ -49,6 +51,7 @@ public class TranslationJob
         _translationServiceFactory = translationServiceFactory;
         _translationRequestService = translationRequestService;
         _eventService = eventService;
+        _subtitlePostProcessingService = subtitlePostProcessingService;
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -222,6 +225,11 @@ public class TranslationJob
                     format.Styles = [];
                 }
             }
+
+            translatedSubtitles = await _subtitlePostProcessingService.Process(
+                translatedSubtitles,
+                request,
+                cancellationToken);
 
             // statistics tracking
             await _statisticsService.UpdateTranslationStatisticsFromSubtitles(request, serviceType, translationService.ModelName, translatedSubtitles);
