@@ -48,6 +48,7 @@ export interface ITranslationRequest {
 
 export interface ITranslationRequestDetail extends ITranslationRequest {
     retrySummary?: ISelectiveRetrySummary | null
+    llmReviewSummary?: ILlmReviewSummary | null
     events: ITranslationRequestEvent[]
     lines: ISubtitleLineComparison[]
 }
@@ -57,6 +58,16 @@ export interface ISelectiveRetrySummary {
     improved: number
     failed: number
     skipped: number
+    reasonDistribution: Record<string, number>
+}
+
+export interface ILlmReviewSummary {
+    reviewed: number
+    changed: number
+    failed: number
+    suspiciousReviewed: number
+    sampledReviewed: number
+    provider?: string | null
     reasonDistribution: Record<string, number>
 }
 

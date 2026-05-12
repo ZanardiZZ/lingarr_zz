@@ -21,6 +21,7 @@ public class TranslationRequestDetail
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public SelectiveRetrySummary? RetrySummary { get; set; }
+    public LlmReviewSummary? LlmReviewSummary { get; set; }
     public List<TranslationRequestEventDetail> Events { get; set; } = [];
     public List<TranslationRequestSubtitleLines> Lines { get; set; } = [];
 }

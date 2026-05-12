@@ -28,6 +28,7 @@ public class TranslationJob
     private readonly ITranslationRequestEventService _eventService;
     private readonly ISubtitlePostProcessingService _subtitlePostProcessingService;
     private readonly ISubtitleSelectiveRetryService _subtitleSelectiveRetryService;
+    private readonly ISubtitleLlmReviewService _subtitleLlmReviewService;
 
     public TranslationJob(
         ILogger<TranslationJob> logger,
@@ -41,7 +42,8 @@ public class TranslationJob
         ITranslationRequestService translationRequestService,
         ITranslationRequestEventService eventService,
         ISubtitlePostProcessingService subtitlePostProcessingService,
-        ISubtitleSelectiveRetryService subtitleSelectiveRetryService)
+        ISubtitleSelectiveRetryService subtitleSelectiveRetryService,
+        ISubtitleLlmReviewService subtitleLlmReviewService)
     {
         _logger = logger;
         _settings = settings;
@@ -55,6 +57,7 @@ public class TranslationJob
         _eventService = eventService;
         _subtitlePostProcessingService = subtitlePostProcessingService;
         _subtitleSelectiveRetryService = subtitleSelectiveRetryService;
+        _subtitleLlmReviewService = subtitleLlmReviewService;
     }
 
     [AutomaticRetry(Attempts = 0)]
@@ -238,6 +241,17 @@ public class TranslationJob
                 translatedSubtitles,
                 request,
                 serviceType,
+                stripSubtitleFormatting,
+                cancellationToken);
+
+            translatedSubtitles = await _subtitlePostProcessingService.Process(
+                translatedSubtitles,
+                request,
+                cancellationToken);
+
+            translatedSubtitles = await _subtitleLlmReviewService.ReviewLines(
+                translatedSubtitles,
+                request,
                 stripSubtitleFormatting,
                 cancellationToken);
 

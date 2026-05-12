@@ -76,8 +76,13 @@ public class TranslationJobPostProcessingTests
             .Returns("/tmp/output.es.srt");
 
         List<SubtitleItem>? writtenSubtitles = null;
+        var order = new List<string>();
         subtitleService.Setup(s => s.WriteSubtitles("/tmp/output.es.srt", It.IsAny<List<SubtitleItem>>(), false))
-            .Callback<string, List<SubtitleItem>, bool>((_, subs, _) => writtenSubtitles = subs)
+            .Callback<string, List<SubtitleItem>, bool>((_, subs, _) =>
+            {
+                order.Add("write");
+                writtenSubtitles = subs;
+            })
             .Returns(Task.CompletedTask);
 
         var translationFactory = new Mock<ITranslationServiceFactory>();
@@ -98,6 +103,7 @@ public class TranslationJobPostProcessingTests
         postProcessor.Setup(p => p.Process(It.IsAny<List<SubtitleItem>>(), It.IsAny<TranslationRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((List<SubtitleItem> subs, TranslationRequest _, CancellationToken _) =>
             {
+                order.Add("post-processing");
                 subs[0].TranslatedLines = ["post-processed"];
                 return subs;
             });
@@ -109,7 +115,32 @@ public class TranslationJobPostProcessingTests
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((List<SubtitleItem> subs, TranslationRequest _, string _, bool _, CancellationToken _) => subs);
+            .ReturnsAsync((List<SubtitleItem> subs, TranslationRequest _, string _, bool _, CancellationToken _) =>
+            {
+                order.Add("selective-retry");
+                return subs;
+            });
+
+        var llmReviewer = new Mock<ISubtitleLlmReviewService>();
+        llmReviewer.Setup(r => r.ReviewLines(
+                It.IsAny<List<SubtitleItem>>(),
+                It.IsAny<TranslationRequest>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((List<SubtitleItem> subs, TranslationRequest _, bool _, CancellationToken _) =>
+            {
+                order.Add("llm-review");
+                return subs;
+            });
+
+        var statisticsService = new Mock<IStatisticsService>();
+        statisticsService.Setup(s => s.UpdateTranslationStatisticsFromSubtitles(
+                It.IsAny<TranslationRequest>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<List<SubtitleItem>>()))
+            .Callback(() => order.Add("statistics"))
+            .ReturnsAsync(0);
 
         var job = new TranslationJob(
             NullLogger<TranslationJob>.Instance,
@@ -118,16 +149,28 @@ public class TranslationJobPostProcessingTests
             Mock.Of<IProgressService>(),
             subtitleService.Object,
             Mock.Of<IScheduleService>(),
-            Mock.Of<IStatisticsService>(),
+            statisticsService.Object,
             translationFactory.Object,
             translationRequestService.Object,
             Mock.Of<ITranslationRequestEventService>(),
             postProcessor.Object,
-            selectiveRetry.Object);
+            selectiveRetry.Object,
+            llmReviewer.Object);
 
         await job.Execute(translationRequest, CancellationToken.None);
 
-        postProcessor.Verify(p => p.Process(It.IsAny<List<SubtitleItem>>(), translationRequest, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        postProcessor.Verify(p => p.Process(It.IsAny<List<SubtitleItem>>(), translationRequest, It.IsAny<CancellationToken>()), Times.Exactly(3));
+        Assert.Equal(
+            [
+                "post-processing",
+                "selective-retry",
+                "post-processing",
+                "llm-review",
+                "post-processing",
+                "statistics",
+                "write"
+            ],
+            order);
         Assert.NotNull(writtenSubtitles);
         Assert.Equal("post-processed", writtenSubtitles![0].TranslatedLines![0]);
     }

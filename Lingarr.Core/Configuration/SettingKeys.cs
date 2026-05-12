@@ -99,6 +99,10 @@ public static class SettingKeys
         public const string SelectiveRetryGlossary = "selective_retry_glossary";
         public const string SelectiveRetryProperNounLockEnabled = "selective_retry_proper_noun_lock_enabled";
         public const string SelectiveRetryProtectedPatterns = "selective_retry_protected_patterns";
+        public const string LlmReviewerEnabled = "llm_reviewer_enabled";
+        public const string LlmReviewerProvider = "llm_reviewer_provider";
+        public const string LlmReviewerSamplePercent = "llm_reviewer_sample_percent";
+        public const string LlmReviewerLogAttempts = "llm_reviewer_log_attempts";
     }
 
     public static class Automation

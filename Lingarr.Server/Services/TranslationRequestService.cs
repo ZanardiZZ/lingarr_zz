@@ -101,6 +101,7 @@ public class TranslationRequestService : ITranslationRequestService
             CreatedAt = request.CreatedAt,
             UpdatedAt = request.UpdatedAt,
             RetrySummary = BuildSelectiveRetrySummary(request),
+            LlmReviewSummary = BuildLlmReviewSummary(request),
             Events = events.Select(translationRequestEvent => new TranslationRequestEventDetail
             {
                 Id = translationRequestEvent.Id,
@@ -109,6 +110,47 @@ public class TranslationRequestService : ITranslationRequestService
                 CreatedAt = translationRequestEvent.CreatedAt
             }).ToList(),
             Lines = translationRequestLines.Count > 0 ? translationRequestLines : []
+        };
+    }
+
+    private static LlmReviewSummary? BuildLlmReviewSummary(TranslationRequest request)
+    {
+        var hasSummary = request.LlmReviewReviewedCount.HasValue
+                         || request.LlmReviewChangedCount.HasValue
+                         || request.LlmReviewFailedCount.HasValue
+                         || request.LlmReviewSuspiciousReviewedCount.HasValue
+                         || request.LlmReviewSampledReviewedCount.HasValue
+                         || !string.IsNullOrWhiteSpace(request.LlmReviewProvider)
+                         || !string.IsNullOrWhiteSpace(request.LlmReviewReasonCountsJson);
+
+        if (!hasSummary)
+        {
+            return null;
+        }
+
+        var reasonDistribution = new Dictionary<string, int>();
+        if (!string.IsNullOrWhiteSpace(request.LlmReviewReasonCountsJson))
+        {
+            try
+            {
+                reasonDistribution = JsonSerializer.Deserialize<Dictionary<string, int>>(
+                    request.LlmReviewReasonCountsJson) ?? [];
+            }
+            catch (JsonException)
+            {
+                reasonDistribution = [];
+            }
+        }
+
+        return new LlmReviewSummary
+        {
+            Reviewed = request.LlmReviewReviewedCount ?? 0,
+            Changed = request.LlmReviewChangedCount ?? 0,
+            Failed = request.LlmReviewFailedCount ?? 0,
+            SuspiciousReviewed = request.LlmReviewSuspiciousReviewedCount ?? 0,
+            SampledReviewed = request.LlmReviewSampledReviewedCount ?? 0,
+            Provider = request.LlmReviewProvider,
+            ReasonDistribution = reasonDistribution
         };
     }
 

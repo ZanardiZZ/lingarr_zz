@@ -142,6 +142,58 @@
                 </template>
             </CardComponent>
 
+            <CardComponent v-if="detail.llmReviewSummary" title="LLM Review">
+                <template #content>
+                    <div class="grid grid-cols-2 gap-3 md:grid-cols-5">
+                        <div
+                            v-for="metric in llmReviewMetrics"
+                            :key="metric.label"
+                            class="rounded-md border border-accent/60 bg-primary/30 p-3">
+                            <div class="text-xs font-semibold uppercase text-secondary-content">
+                                {{ metric.label }}
+                            </div>
+                            <div class="mt-1 text-2xl font-bold text-primary-content">
+                                {{ metric.value }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div class="rounded-md border border-accent/60 bg-primary/30 p-4">
+                            <h3 class="text-sm font-semibold text-primary-content">
+                                Review provider
+                            </h3>
+                            <div class="mt-3 text-sm text-secondary-content">
+                                {{ detail.llmReviewSummary.provider || 'Unknown' }}
+                            </div>
+                        </div>
+
+                        <div class="rounded-md border border-accent/60 bg-primary/30 p-4">
+                            <h3 class="text-sm font-semibold text-primary-content">
+                                Reason distribution
+                            </h3>
+                            <div v-if="llmReviewReasonRows.length > 0" class="mt-3 space-y-2">
+                                <div
+                                    v-for="reason in llmReviewReasonRows"
+                                    :key="reason.key"
+                                    class="flex items-center justify-between gap-3 text-sm">
+                                    <span class="min-w-0 truncate text-primary-content">
+                                        {{ reason.label }}
+                                    </span>
+                                    <BadgeComponent
+                                        classes="border-accent bg-secondary text-primary-content">
+                                        {{ reason.count }}
+                                    </BadgeComponent>
+                                </div>
+                            </div>
+                            <div v-else class="mt-3 text-sm text-secondary-content">
+                                Only sampled lines were reviewed.
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </CardComponent>
+
             <CardComponent v-if="reversedLines.length > 0" title="Translated Lines">
                 <template #content>
                     <div class="hidden border-b border-accent font-bold md:grid md:grid-cols-12">
@@ -232,6 +284,32 @@ const retryMetrics = computed(() => {
 
 const retryReasonRows = computed(() => {
     const reasons = detail.value?.retrySummary?.reasonDistribution ?? {}
+    return Object.entries(reasons)
+        .map(([key, count]) => ({
+            key,
+            label: formatRetryReason(key),
+            count
+        }))
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+})
+
+const llmReviewMetrics = computed(() => {
+    const summary = detail.value?.llmReviewSummary
+    if (!summary) {
+        return []
+    }
+
+    return [
+        { label: 'Reviewed', value: summary.reviewed },
+        { label: 'Changed', value: summary.changed },
+        { label: 'Failed', value: summary.failed },
+        { label: 'Suspicious', value: summary.suspiciousReviewed },
+        { label: 'Sampled', value: summary.sampledReviewed }
+    ]
+})
+
+const llmReviewReasonRows = computed(() => {
+    const reasons = detail.value?.llmReviewSummary?.reasonDistribution ?? {}
     return Object.entries(reasons)
         .map(([key, count]) => ({
             key,

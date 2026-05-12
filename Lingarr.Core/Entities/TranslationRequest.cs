@@ -21,4 +21,11 @@ public class TranslationRequest : BaseEntity
     public int? SelectiveRetryFailedCount { get; set; }
     public int? SelectiveRetrySkippedCount { get; set; }
     public string? SelectiveRetryReasonCountsJson { get; set; }
+    public int? LlmReviewReviewedCount { get; set; }
+    public int? LlmReviewChangedCount { get; set; }
+    public int? LlmReviewFailedCount { get; set; }
+    public int? LlmReviewSuspiciousReviewedCount { get; set; }
+    public int? LlmReviewSampledReviewedCount { get; set; }
+    public string? LlmReviewProvider { get; set; }
+    public string? LlmReviewReasonCountsJson { get; set; }
 }

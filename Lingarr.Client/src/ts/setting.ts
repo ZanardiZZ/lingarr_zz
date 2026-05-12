@@ -60,6 +60,10 @@ export const SETTINGS = {
     SELECTIVE_RETRY_GLOSSARY: 'selective_retry_glossary',
     SELECTIVE_RETRY_PROPER_NOUN_LOCK_ENABLED: 'selective_retry_proper_noun_lock_enabled',
     SELECTIVE_RETRY_PROTECTED_PATTERNS: 'selective_retry_protected_patterns',
+    LLM_REVIEWER_ENABLED: 'llm_reviewer_enabled',
+    LLM_REVIEWER_PROVIDER: 'llm_reviewer_provider',
+    LLM_REVIEWER_SAMPLE_PERCENT: 'llm_reviewer_sample_percent',
+    LLM_REVIEWER_LOG_ATTEMPTS: 'llm_reviewer_log_attempts',
     AUTH_ENABLED: 'auth_enabled',
     ONBOARDING_COMPLETED: 'onboarding_completed',
     TELEMETRY_ENABLED: 'telemetry_enabled',
@@ -133,6 +137,10 @@ export interface ISettings {
     selective_retry_glossary: string
     selective_retry_proper_noun_lock_enabled: string
     selective_retry_protected_patterns: string
+    llm_reviewer_enabled: string
+    llm_reviewer_provider: string
+    llm_reviewer_sample_percent: string
+    llm_reviewer_log_attempts: string
     auth_enabled: string
     onboarding_completed: string
     telemetry_enabled: string

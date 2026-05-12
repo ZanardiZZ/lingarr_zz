@@ -185,6 +185,59 @@
                     </span>
                 </div>
             </details>
+
+            <details class="rounded-lg border border-tertiary-content/20 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-primary-content">
+                    LLM reviewer (advanced)
+                </summary>
+
+                <div class="mt-3 flex flex-col space-y-3">
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Enable LLM reviewer</span>
+                        Review suspicious lines and a sampled percentage of good lines with a cloud LLM.
+                    </div>
+                    <ToggleButton v-model="llmReviewerEnabled">
+                        <span class="text-sm font-medium text-primary-content">
+                            {{ llmReviewerEnabled == 'true' ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    </ToggleButton>
+                    <span
+                        v-if="llmReviewerEnabled === 'true'"
+                        class="badge badge-warning w-fit text-xs">
+                        Warning: cloud review can increase cost and processing time
+                    </span>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Reviewer provider</span>
+                        Cloud LLM provider used only for the review pass.
+                    </div>
+                    <select v-model="llmReviewerProvider" class="select select-bordered w-full">
+                        <option :value="SERVICE_TYPE.OPENAI">OpenAI</option>
+                        <option :value="SERVICE_TYPE.GEMINI">Gemini</option>
+                        <option :value="SERVICE_TYPE.ANTHROPIC">Anthropic</option>
+                        <option :value="SERVICE_TYPE.DEEPSEEK">DeepSeek</option>
+                    </select>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Sampling percent (0-100)</span>
+                        Percentage of apparently good lines reviewed after all suspicious lines.
+                    </div>
+                    <InputComponent
+                        v-model="llmReviewerSamplePercent"
+                        :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
+                        @update:validation="(val) => (isValid.llmReviewerSamplePercent = val)" />
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Log reviewer attempts</span>
+                        Enables structured reviewer logging without subtitle text content.
+                    </div>
+                    <ToggleButton v-model="llmReviewerLogAttempts">
+                        <span class="text-sm font-medium text-primary-content">
+                            {{ llmReviewerLogAttempts == 'true' ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    </ToggleButton>
+                </div>
+            </details>
         </template>
     </CardComponent>
 </template>
@@ -209,7 +262,8 @@ const isValid = reactive({
     selectiveRetryScoreThreshold: true,
     selectiveRetryImprovementMargin: true,
     selectiveRetryGlossary: true,
-    selectiveRetryProtectedPatterns: true
+    selectiveRetryProtectedPatterns: true,
+    llmReviewerSamplePercent: true
 })
 const serviceType = computed(() => settingsStore.getSetting(SETTINGS.SERVICE_TYPE))
 
@@ -355,6 +409,41 @@ const selectiveRetryProtectedPatterns = computed({
             newValue,
             isValidPatterns
         )
+        saveNotification.value?.show()
+    }
+})
+
+const llmReviewerEnabled = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.LLM_REVIEWER_ENABLED) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.LLM_REVIEWER_ENABLED, newValue, true)
+        saveNotification.value?.show()
+    }
+})
+
+const llmReviewerProvider = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.LLM_REVIEWER_PROVIDER) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.LLM_REVIEWER_PROVIDER, newValue, true)
+        saveNotification.value?.show()
+    }
+})
+
+const llmReviewerSamplePercent = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.LLM_REVIEWER_SAMPLE_PERCENT) as string,
+    set: (newValue: string): void => {
+        const parsed = Number.parseInt(newValue, 10)
+        const inRange = Number.isFinite(parsed) && parsed >= 0 && parsed <= 100
+        isValid.llmReviewerSamplePercent = inRange
+        settingsStore.updateSetting(SETTINGS.LLM_REVIEWER_SAMPLE_PERCENT, newValue, inRange)
+        saveNotification.value?.show()
+    }
+})
+
+const llmReviewerLogAttempts = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.LLM_REVIEWER_LOG_ATTEMPTS) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.LLM_REVIEWER_LOG_ATTEMPTS, newValue, true)
         saveNotification.value?.show()
     }
 })

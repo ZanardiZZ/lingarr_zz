@@ -33,6 +33,35 @@ public class MigrationTests
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync(TestContext.Current.CancellationToken);
             Assert.Equal(System.Data.ConnectionState.Open, connection.State);
+
+            await using var settingsCommand = connection.CreateCommand();
+            settingsCommand.CommandText = """
+                SELECT COUNT(*)
+                FROM settings
+                WHERE key IN (
+                    'llm_reviewer_enabled',
+                    'llm_reviewer_provider',
+                    'llm_reviewer_sample_percent',
+                    'llm_reviewer_log_attempts'
+                )
+                """;
+            Assert.Equal(4L, (long)(await settingsCommand.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+
+            await using var columnsCommand = connection.CreateCommand();
+            columnsCommand.CommandText = """
+                SELECT COUNT(*)
+                FROM pragma_table_info('translation_requests')
+                WHERE name IN (
+                    'llm_review_reviewed_count',
+                    'llm_review_changed_count',
+                    'llm_review_failed_count',
+                    'llm_review_suspicious_reviewed_count',
+                    'llm_review_sampled_reviewed_count',
+                    'llm_review_provider',
+                    'llm_review_reason_counts_json'
+                )
+                """;
+            Assert.Equal(7L, (long)(await columnsCommand.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
         }
         finally
         {
