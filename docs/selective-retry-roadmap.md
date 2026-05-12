@@ -12,7 +12,7 @@ This roadmap documents the next steps to complete the feature, with a focus on U
 
 ---
 
-## Phase 1 — Stabilization of backend v1
+## Phase 1 — Stabilization of backend v1 ✅ Implemented (May 12, 2026)
 
 ### Goals
 - Validate behavior with real-world subtitle datasets.
@@ -58,7 +58,7 @@ This roadmap documents the next steps to complete the feature, with a focus on U
 
 ---
 
-## Phase 2 — UI configuration (minimal)
+## Phase 2 — UI configuration (minimal) ✅ Implemented (May 12, 2026)
 
 ### Goals
 - Expose current backend settings safely and clearly.
