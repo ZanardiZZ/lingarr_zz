@@ -128,7 +128,7 @@ This roadmap documents the next steps to complete the feature, with a focus on U
 
 ---
 
-## Phase 5 — Glossary / proper noun protection
+## Phase 5 — Glossary / proper noun protection ✅ Implemented (May 12, 2026)
 
 ### Goals
 - Avoid unwanted named-entity drift.

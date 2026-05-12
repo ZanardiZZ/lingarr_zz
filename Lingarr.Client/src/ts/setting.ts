@@ -57,6 +57,9 @@ export const SETTINGS = {
     SELECTIVE_RETRY_LOG_ATTEMPTS: 'selective_retry_log_attempts',
     SELECTIVE_RETRY_SCORE_THRESHOLD: 'selective_retry_score_threshold',
     SELECTIVE_RETRY_IMPROVEMENT_MARGIN: 'selective_retry_improvement_margin',
+    SELECTIVE_RETRY_GLOSSARY: 'selective_retry_glossary',
+    SELECTIVE_RETRY_PROPER_NOUN_LOCK_ENABLED: 'selective_retry_proper_noun_lock_enabled',
+    SELECTIVE_RETRY_PROTECTED_PATTERNS: 'selective_retry_protected_patterns',
     AUTH_ENABLED: 'auth_enabled',
     ONBOARDING_COMPLETED: 'onboarding_completed',
     TELEMETRY_ENABLED: 'telemetry_enabled',
@@ -127,6 +130,9 @@ export interface ISettings {
     selective_retry_log_attempts: string
     selective_retry_score_threshold: string
     selective_retry_improvement_margin: string
+    selective_retry_glossary: string
+    selective_retry_proper_noun_lock_enabled: string
+    selective_retry_protected_patterns: string
     auth_enabled: string
     onboarding_completed: string
     telemetry_enabled: string

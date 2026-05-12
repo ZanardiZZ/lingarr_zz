@@ -17,6 +17,7 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
     private const int ChangedProperNounWeight = 30;
     private const int MissingParentheticalCueWeight = 25;
     private const int AddedSpeakerLabelWeight = 25;
+    private const int ProtectedTermChangedWeight = 75;
 
     private static readonly string[] LeadingLabels =
     [
@@ -56,7 +57,11 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         "usted", "vous", "avec", "pour", "dans", "und", "der", "die", "das", "nicht", "con", "per"
     ];
 
-    public SubtitleQualityAnalysis Analyze(string translatedLine, string sourceLine, string? targetLanguage)
+    public SubtitleQualityAnalysis Analyze(
+        string translatedLine,
+        string sourceLine,
+        string? targetLanguage,
+        IReadOnlyDictionary<string, string>? protectedTerms = null)
     {
         var issues = new List<SubtitleQualityIssue>();
         var normalizedSource = NormalizeSpacing(sourceLine);
@@ -79,13 +84,18 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         if (HasMissingParentheticalCue(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("missing_parenthetical_cue", MissingParentheticalCueWeight));
         if (HasAddedSpeakerLabel(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("added_speaker_label", AddedSpeakerLabelWeight));
         if (HasCueStructureChanged(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("cue_structure_changed", CueStructureChangedWeight));
-        if (HasLikelyChangedProperNoun(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("changed_proper_noun", ChangedProperNounWeight));
+        if (HasProtectedTermChanged(normalizedLine, normalizedSource, protectedTerms)) issues.Add(new SubtitleQualityIssue("protected_term_changed", ProtectedTermChangedWeight));
+        if (HasLikelyChangedProperNoun(normalizedLine, normalizedSource, protectedTerms)) issues.Add(new SubtitleQualityIssue("changed_proper_noun", ChangedProperNounWeight));
 
         return new SubtitleQualityAnalysis(issues);
     }
 
-    public List<string> GetSuspiciousReasons(string translatedLine, string sourceLine, string? targetLanguage)
-        => Analyze(translatedLine, sourceLine, targetLanguage).Reasons;
+    public List<string> GetSuspiciousReasons(
+        string translatedLine,
+        string sourceLine,
+        string? targetLanguage,
+        IReadOnlyDictionary<string, string>? protectedTerms = null)
+        => Analyze(translatedLine, sourceLine, targetLanguage, protectedTerms).Reasons;
 
     private static bool ContainsAny(string line, IEnumerable<string> terms)
     {
@@ -232,14 +242,59 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         return !lineHasCue;
     }
 
-    private static bool HasLikelyChangedProperNoun(string line, string sourceLine)
+    private static bool HasProtectedTermChanged(
+        string line,
+        string sourceLine,
+        IReadOnlyDictionary<string, string>? protectedTerms)
+    {
+        if (protectedTerms == null || protectedTerms.Count == 0) return false;
+
+        foreach (var protectedTerm in protectedTerms)
+        {
+            if (!ContainsWholeTerm(sourceLine, protectedTerm.Key)) continue;
+            if (!ContainsWholeTerm(line, protectedTerm.Value)) return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasLikelyChangedProperNoun(
+        string line,
+        string sourceLine,
+        IReadOnlyDictionary<string, string>? protectedTerms)
     {
         if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(sourceLine)) return false;
         var sourceNames = GetLikelyNames(sourceLine);
         if (sourceNames.Count == 0) return false;
 
-        var lineNameSet = GetLikelyNames(line).ToHashSet(StringComparer.Ordinal);
-        return sourceNames.Any(name => !lineNameSet.Contains(name));
+        return sourceNames.Any(name =>
+        {
+            var expectedName = GetProtectedTarget(protectedTerms, name) ?? name;
+            return !ContainsWholeTerm(line, expectedName);
+        });
+    }
+
+    private static string? GetProtectedTarget(IReadOnlyDictionary<string, string>? protectedTerms, string sourceTerm)
+    {
+        if (protectedTerms == null || protectedTerms.Count == 0) return null;
+
+        foreach (var protectedTerm in protectedTerms)
+        {
+            if (string.Equals(protectedTerm.Key, sourceTerm, StringComparison.OrdinalIgnoreCase))
+            {
+                return protectedTerm.Value;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ContainsWholeTerm(string text, string term)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(term)) return false;
+
+        var pattern = $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(term)}(?![\p{{L}}\p{{N}}_])";
+        return Regex.IsMatch(text, pattern, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
     }
 
     private static List<string> GetLikelyNames(string text)

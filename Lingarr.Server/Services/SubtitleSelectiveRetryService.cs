@@ -8,6 +8,7 @@ using Lingarr.Server.Models.FileSystem;
 using Lingarr.Server.Services.Subtitle;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Lingarr.Server.Services;
 
@@ -19,9 +20,13 @@ public class SubtitleSelectiveRetryService(
     ISubtitleQualityAnalyzer subtitleQualityAnalyzer) : ISubtitleSelectiveRetryService
 {
     private const int HighSeverityScoreFloor = 60;
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(100);
 
     private static readonly HashSet<string> LlmProviderScope =
     ["openai", "localai", "gemini", "anthropic", "deepseek"];
+
+    private static readonly HashSet<string> NonNameLeadingWords =
+    ["I", "The", "A", "An", "We", "You", "He", "She", "They", "It", "This", "That"];
 
     public async Task<List<SubtitleItem>> RetrySuspiciousLines(
         List<SubtitleItem> translatedSubtitles,
@@ -37,7 +42,10 @@ public class SubtitleSelectiveRetryService(
             SettingKeys.Translation.SelectiveRetryProviderScope,
             SettingKeys.Translation.SelectiveRetryLogAttempts,
             SettingKeys.Translation.SelectiveRetryScoreThreshold,
-            SettingKeys.Translation.SelectiveRetryImprovementMargin
+            SettingKeys.Translation.SelectiveRetryImprovementMargin,
+            SettingKeys.Translation.SelectiveRetryGlossary,
+            SettingKeys.Translation.SelectiveRetryProperNounLockEnabled,
+            SettingKeys.Translation.SelectiveRetryProtectedPatterns
         ]);
 
         if (!ParseBool(settings, SettingKeys.Translation.SelectiveRetryEnabled, true))
@@ -63,6 +71,13 @@ public class SubtitleSelectiveRetryService(
             ? Math.Max(configuredScoreThreshold, HighSeverityScoreFloor)
             : configuredScoreThreshold;
         var improvementMargin = ParseInt(settings, SettingKeys.Translation.SelectiveRetryImprovementMargin, 10, 0, 100);
+        var properNounLockEnabled = ParseBool(settings, SettingKeys.Translation.SelectiveRetryProperNounLockEnabled, false);
+        var glossary = ParseGlossary(
+            settings.GetValueOrDefault(SettingKeys.Translation.SelectiveRetryGlossary, "{}"),
+            translationRequest.SourceLanguage,
+            translationRequest.TargetLanguage);
+        var protectedPatterns = ParseProtectedPatterns(
+            settings.GetValueOrDefault(SettingKeys.Translation.SelectiveRetryProtectedPatterns, "[]"));
 
         if (maxAttempts <= 0)
         {
@@ -92,7 +107,12 @@ public class SubtitleSelectiveRetryService(
 
                 var sourceLine = GetSourceLine(subtitle, i, stripSubtitleFormatting);
                 var currentBest = subtitle.TranslatedLines[i] ?? string.Empty;
-                var currentAnalysis = subtitleQualityAnalyzer.Analyze(currentBest, sourceLine, translationRequest.TargetLanguage);
+                var protectedTerms = BuildProtectedTerms(sourceLine, glossary, properNounLockEnabled, protectedPatterns);
+                var currentAnalysis = subtitleQualityAnalyzer.Analyze(
+                    currentBest,
+                    sourceLine,
+                    translationRequest.TargetLanguage,
+                    protectedTerms);
                 var currentReasons = currentAnalysis.Reasons;
 
                 if (currentReasons.Count == 0)
@@ -125,7 +145,12 @@ public class SubtitleSelectiveRetryService(
 
                     try
                     {
-                        var retryPrompt = BuildRetryPrompt(sourceLine, currentBest, currentReasons, translationRequest.TargetLanguage);
+                        var retryPrompt = BuildRetryPrompt(
+                            sourceLine,
+                            currentBest,
+                            currentReasons,
+                            translationRequest.TargetLanguage,
+                            protectedTerms);
                         var retryRaw = await translator.TranslateSubtitleLine(new TranslateAbleSubtitleLine
                         {
                             SubtitleLine = retryPrompt,
@@ -137,12 +162,17 @@ public class SubtitleSelectiveRetryService(
                             ? SubtitleFormatterService.RemoveMarkup(retryRaw)
                             : retryRaw.Trim();
 
-                        var retryAnalysis = subtitleQualityAnalyzer.Analyze(retryCleaned, sourceLine, translationRequest.TargetLanguage);
+                        var retryAnalysis = subtitleQualityAnalyzer.Analyze(
+                            retryCleaned,
+                            sourceLine,
+                            translationRequest.TargetLanguage,
+                            protectedTerms);
                         var retryReasonsDetected = retryAnalysis.Reasons;
                         var analysisBeforeRetry = currentAnalysis;
                         var reasonsBeforeRetry = currentReasons;
 
-                        var improved = IsMeaningfullyImproved(
+                        var protectedTermsSatisfied = ProtectedTermsSatisfied(retryCleaned, protectedTerms);
+                        var improved = protectedTermsSatisfied && IsMeaningfullyImproved(
                             retryCleaned,
                             analysisBeforeRetry,
                             retryAnalysis,
@@ -167,7 +197,7 @@ public class SubtitleSelectiveRetryService(
                                 subtitle.EndTime,
                                 attempt,
                                 improved,
-                                improved ? "improved" : "not_improved",
+                                improved ? "improved" : protectedTermsSatisfied ? "not_improved" : "protected_term_changed",
                                 analysisBeforeRetry.Score,
                                 retryAnalysis.Score,
                                 improvementMargin,
@@ -262,6 +292,246 @@ public class SubtitleSelectiveRetryService(
         }
     }
 
+    private static Dictionary<string, string> BuildProtectedTerms(
+        string sourceLine,
+        IReadOnlyDictionary<string, string> glossary,
+        bool properNounLockEnabled,
+        IReadOnlyCollection<string> protectedPatterns)
+    {
+        var protectedTerms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var glossaryTerm in glossary)
+        {
+            if (ContainsWholeTerm(sourceLine, glossaryTerm.Key))
+            {
+                protectedTerms[glossaryTerm.Key] = glossaryTerm.Value;
+            }
+        }
+
+        if (!properNounLockEnabled)
+        {
+            return protectedTerms;
+        }
+
+        foreach (var name in ExtractProperNouns(sourceLine))
+        {
+            protectedTerms.TryAdd(name, name);
+        }
+
+        foreach (var pattern in protectedPatterns)
+        {
+            MatchCollection matches;
+            try
+            {
+                matches = Regex.Matches(sourceLine, pattern, RegexOptions.None, RegexTimeout);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                continue;
+            }
+
+            foreach (Match match in matches)
+            {
+                var value = match.Value.Trim();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    protectedTerms.TryAdd(value, value);
+                }
+            }
+        }
+
+        return protectedTerms;
+    }
+
+    private static Dictionary<string, string> ParseGlossary(string rawGlossary, string sourceLanguage, string targetLanguage)
+    {
+        var glossary = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(rawGlossary))
+        {
+            return glossary;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawGlossary);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return glossary;
+            }
+
+            var flatGlossaryDetected = false;
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String)
+                {
+                    flatGlossaryDetected = true;
+                    AddGlossaryTerm(glossary, property.Name, property.Value.GetString());
+                    continue;
+                }
+
+                if (property.Value.ValueKind != JsonValueKind.Object
+                    || !LanguagePairMatches(property.Name, sourceLanguage, targetLanguage))
+                {
+                    continue;
+                }
+
+                foreach (var term in property.Value.EnumerateObject())
+                {
+                    if (term.Value.ValueKind != JsonValueKind.String)
+                    {
+                        continue;
+                    }
+
+                    AddGlossaryTerm(glossary, term.Name, term.Value.GetString());
+                }
+            }
+
+            if (flatGlossaryDetected)
+            {
+                return glossary;
+            }
+        }
+        catch (JsonException)
+        {
+            return glossary;
+        }
+
+        return glossary;
+    }
+
+    private static void AddGlossaryTerm(Dictionary<string, string> glossary, string sourceTerm, string? targetTerm)
+    {
+        if (string.IsNullOrWhiteSpace(sourceTerm) || string.IsNullOrWhiteSpace(targetTerm))
+        {
+            return;
+        }
+
+        glossary[sourceTerm.Trim()] = targetTerm.Trim();
+    }
+
+    private static List<string> ParseProtectedPatterns(string rawPatterns)
+    {
+        if (string.IsNullOrWhiteSpace(rawPatterns))
+        {
+            return [];
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(rawPatterns);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            return document.RootElement
+                .EnumerateArray()
+                .Where(element => element.ValueKind == JsonValueKind.String)
+                .Select(element => element.GetString())
+                .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
+                .Select(pattern => pattern!.Trim())
+                .Where(IsValidRegex)
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static bool IsValidRegex(string pattern)
+    {
+        try
+        {
+            _ = Regex.Match(string.Empty, pattern, RegexOptions.None, RegexTimeout);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static bool LanguagePairMatches(string pairKey, string sourceLanguage, string targetLanguage)
+    {
+        var separator = pairKey.Contains("->", StringComparison.Ordinal) ? "->" : ":";
+        var separatorIndex = pairKey.IndexOf(separator, StringComparison.Ordinal);
+        if (separatorIndex <= 0 || separatorIndex + separator.Length >= pairKey.Length)
+        {
+            return false;
+        }
+
+        var source = pairKey[..separatorIndex].Trim();
+        var target = pairKey[(separatorIndex + separator.Length)..].Trim();
+
+        return LanguageMatches(source, sourceLanguage) && LanguageMatches(target, targetLanguage);
+    }
+
+    private static bool LanguageMatches(string configured, string actual)
+    {
+        if (configured == "*")
+        {
+            return true;
+        }
+
+        var configuredNormalized = NormalizeLanguageCode(configured);
+        var actualNormalized = NormalizeLanguageCode(actual);
+
+        return configuredNormalized == actualNormalized
+            || configuredNormalized == PrimaryLanguageSubtag(actualNormalized)
+            || PrimaryLanguageSubtag(configuredNormalized) == actualNormalized;
+    }
+
+    private static string NormalizeLanguageCode(string language)
+        => language.Trim().Replace('_', '-').ToLowerInvariant();
+
+    private static string PrimaryLanguageSubtag(string language)
+    {
+        var separatorIndex = language.IndexOf('-');
+        return separatorIndex >= 0 ? language[..separatorIndex] : language;
+    }
+
+    private static List<string> ExtractProperNouns(string sourceLine)
+    {
+        var names = new List<string>();
+        foreach (Match match in Regex.Matches(sourceLine, @"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b", RegexOptions.None, RegexTimeout))
+        {
+            var value = match.Value.Trim();
+            var hasWhitespace = value.Contains(' ');
+            if (!hasWhitespace && match.Index == 0)
+            {
+                continue;
+            }
+
+            if (hasWhitespace && match.Index == 0 && NonNameLeadingWords.Contains(value))
+            {
+                continue;
+            }
+
+            names.Add(value);
+        }
+
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static bool ProtectedTermsSatisfied(string line, IReadOnlyDictionary<string, string> protectedTerms)
+        => protectedTerms.Count == 0 || protectedTerms.All(term => ContainsWholeTerm(line, term.Value));
+
+    private static bool ContainsWholeTerm(string text, string term)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(term))
+        {
+            return false;
+        }
+
+        var pattern = $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(term)}(?![\p{{L}}\p{{N}}_])";
+        return Regex.IsMatch(text, pattern, RegexOptions.IgnoreCase, RegexTimeout);
+    }
+
     private async Task PersistRetrySummary(
         int translationRequestId,
         int attemptedCount,
@@ -319,12 +589,29 @@ public class SubtitleSelectiveRetryService(
         return string.Empty;
     }
 
-    private static string BuildRetryPrompt(string sourceText, string previousTranslation, List<string> reasons, string targetLanguage)
+    private static string BuildRetryPrompt(
+        string sourceText,
+        string previousTranslation,
+        List<string> reasons,
+        string targetLanguage,
+        IReadOnlyDictionary<string, string> protectedTerms)
     {
+        var immutableTermsSection = protectedTerms.Count == 0
+            ? string.Empty
+            : $"""
+
+IMMUTABLE_TERMS:
+{string.Join(Environment.NewLine, protectedTerms.Select(term => $"- {term.Key} -> {term.Value}"))}
+
+Every immutable term must appear exactly as specified in the corrected subtitle.
+Do not translate, rename, transliterate, or omit immutable terms unless the mapping above explicitly says to.
+""";
+
         return $"""
 You are correcting a subtitle translation.
 Target language: {targetLanguage}
 Detected issues: {string.Join(", ", reasons)}
+{immutableTermsSection}
 
 SOURCE_TEXT:
 {sourceText}

@@ -316,11 +316,91 @@ public class SubtitleSelectiveRetryServiceTests
         Assert.Equal(1, reasonCounts["prompt_leakage"]);
     }
 
+    [Fact]
+    public async Task RetrySuspiciousLines_IncludesGlossaryTermsInRetryPrompt()
+    {
+        var settings = BuildSettings(glossary: """{"en:pt":{"New York":"Nova York"}}""");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var fake = new FakeTranslationService(_ => "Vou para Nova York");
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("TARGET LINE TO TRANSLATE New York", "I am going to New York");
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal("Vou para Nova York", result[0].TranslatedLines[0]);
+        Assert.Contains("IMMUTABLE_TERMS", fake.LastInput);
+        Assert.Contains("- New York -> Nova York", fake.LastInput);
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_RejectsRetryThatViolatesProtectedTerm()
+    {
+        var settings = BuildSettings(glossary: """{"en:pt":{"Malcolm":"Malcolm"}}""");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var fake = new FakeTranslationService(_ => "Ola Malcolme");
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var original = "TARGET LINE TO TRANSLATE Ola Malcolm";
+        var subtitle = BuildSubtitle(original, "Hello Malcolm");
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal(original, result[0].TranslatedLines[0]);
+        Assert.Equal(1, fake.Calls);
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_LocksProperNounsWhenEnabled()
+    {
+        var settings = BuildSettings(properNounLockEnabled: "true");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var fake = new FakeTranslationService(_ => "Ola Malcolm");
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("Ola Malcolme", "Say hi to Malcolm");
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal("Ola Malcolm", result[0].TranslatedLines[0]);
+        Assert.Contains("- Malcolm -> Malcolm", fake.LastInput);
+    }
+
     private static Dictionary<string, string> BuildSettings(
         string maxAttempts = "1",
         string highSeverityOnly = "true",
         string scoreThreshold = "25",
-        string improvementMargin = "10") => new()
+        string improvementMargin = "10",
+        string glossary = "{}",
+        string properNounLockEnabled = "false",
+        string protectedPatterns = "[]") => new()
     {
         [SettingKeys.Translation.SelectiveRetryEnabled] = "true",
         [SettingKeys.Translation.SelectiveRetryMaxAttempts] = maxAttempts,
@@ -328,7 +408,10 @@ public class SubtitleSelectiveRetryServiceTests
         [SettingKeys.Translation.SelectiveRetryProviderScope] = "llm_only",
         [SettingKeys.Translation.SelectiveRetryLogAttempts] = "true",
         [SettingKeys.Translation.SelectiveRetryScoreThreshold] = scoreThreshold,
-        [SettingKeys.Translation.SelectiveRetryImprovementMargin] = improvementMargin
+        [SettingKeys.Translation.SelectiveRetryImprovementMargin] = improvementMargin,
+        [SettingKeys.Translation.SelectiveRetryGlossary] = glossary,
+        [SettingKeys.Translation.SelectiveRetryProperNounLockEnabled] = properNounLockEnabled,
+        [SettingKeys.Translation.SelectiveRetryProtectedPatterns] = protectedPatterns
     };
 
     private static TranslationRequest BuildRequest() => new()
@@ -367,8 +450,11 @@ public class SubtitleSelectiveRetryServiceTests
             List<string>? contextLinesAfter, CancellationToken cancellationToken)
         {
             Calls++;
+            LastInput = text;
             return Task.FromResult(resultFunc(text));
         }
+
+        public string LastInput { get; private set; } = string.Empty;
 
         public Task<List<SourceLanguage>> GetLanguages() => Task.FromResult(new List<SourceLanguage>());
         public Task<ModelsResponse> GetModels() => Task.FromResult(new ModelsResponse());

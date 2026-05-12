@@ -74,4 +74,29 @@ public class SubtitleQualityAnalyzerTests
 
         Assert.DoesNotContain("possible_english_leftover", reasons);
     }
+
+    [Fact]
+    public void Analyze_FlagsProtectedTermChanged()
+    {
+        var reasons = _analyzer.GetSuspiciousReasons(
+            "Vou para Nova Iorque",
+            "I am going to New York",
+            "pt",
+            new Dictionary<string, string> { ["New York"] = "Nova York" });
+
+        Assert.Contains("protected_term_changed", reasons);
+    }
+
+    [Fact]
+    public void Analyze_AllowsGlossaryMappedProperNoun()
+    {
+        var reasons = _analyzer.GetSuspiciousReasons(
+            "Vou para Nova York",
+            "I am going to New York",
+            "pt",
+            new Dictionary<string, string> { ["New York"] = "Nova York" });
+
+        Assert.DoesNotContain("changed_proper_noun", reasons);
+        Assert.DoesNotContain("protected_term_changed", reasons);
+    }
 }

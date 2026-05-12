@@ -145,6 +145,44 @@
                             {{ selectiveRetryLogAttempts == 'true' ? 'Enabled' : 'Disabled' }}
                         </span>
                     </ToggleButton>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Glossary map</span>
+                        JSON object keyed by language pair, mapping source terms to preferred target terms.
+                    </div>
+                    <textarea
+                        v-model="selectiveRetryGlossary"
+                        class="w-full resize-y rounded-md border bg-transparent px-4 py-2 outline-hidden transition-colors duration-200"
+                        :class="isValid.selectiveRetryGlossary ? 'border-accent' : 'border-red-500'"
+                        rows="5"
+                        placeholder='{ "en:pt": { "New York": "Nova York", "Malcolm": "Malcolm" } }'></textarea>
+                    <span v-if="!isValid.selectiveRetryGlossary" class="text-sm text-red-600">
+                        Glossary must be a JSON object.
+                    </span>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Proper noun lock mode</span>
+                        Preserve detected source names unless the glossary maps them explicitly.
+                    </div>
+                    <ToggleButton v-model="selectiveRetryProperNounLockEnabled">
+                        <span class="text-sm font-medium text-primary-content">
+                            {{ selectiveRetryProperNounLockEnabled == 'true' ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    </ToggleButton>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Protected entity patterns</span>
+                        JSON array of regex patterns for extra source tokens that must remain unchanged.
+                    </div>
+                    <textarea
+                        v-model="selectiveRetryProtectedPatterns"
+                        class="w-full resize-y rounded-md border bg-transparent px-4 py-2 outline-hidden transition-colors duration-200"
+                        :class="isValid.selectiveRetryProtectedPatterns ? 'border-accent' : 'border-red-500'"
+                        rows="3"
+                        placeholder='["\\b[A-Z]{2,}\\b"]'></textarea>
+                    <span v-if="!isValid.selectiveRetryProtectedPatterns" class="text-sm text-red-600">
+                        Protected patterns must be a JSON array of strings.
+                    </span>
                 </div>
             </details>
         </template>
@@ -169,7 +207,9 @@ const isValid = reactive({
     retryDelayMultiplier: true,
     selectiveRetryMaxAttempts: true,
     selectiveRetryScoreThreshold: true,
-    selectiveRetryImprovementMargin: true
+    selectiveRetryImprovementMargin: true,
+    selectiveRetryGlossary: true,
+    selectiveRetryProtectedPatterns: true
 })
 const serviceType = computed(() => settingsStore.getSetting(SETTINGS.SERVICE_TYPE))
 
@@ -281,4 +321,59 @@ const selectiveRetryLogAttempts = computed({
         saveNotification.value?.show()
     }
 })
+
+const selectiveRetryGlossary = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_GLOSSARY) as string,
+    set: (newValue: string): void => {
+        const isValidJson = isJsonObject(newValue)
+        isValid.selectiveRetryGlossary = isValidJson
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_GLOSSARY, newValue, isValidJson)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryProperNounLockEnabled = computed({
+    get: (): string =>
+        settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_PROPER_NOUN_LOCK_ENABLED) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(
+            SETTINGS.SELECTIVE_RETRY_PROPER_NOUN_LOCK_ENABLED,
+            newValue,
+            true
+        )
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryProtectedPatterns = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_PROTECTED_PATTERNS) as string,
+    set: (newValue: string): void => {
+        const isValidPatterns = isJsonStringArray(newValue)
+        isValid.selectiveRetryProtectedPatterns = isValidPatterns
+        settingsStore.updateSetting(
+            SETTINGS.SELECTIVE_RETRY_PROTECTED_PATTERNS,
+            newValue,
+            isValidPatterns
+        )
+        saveNotification.value?.show()
+    }
+})
+
+function isJsonObject(value: string): boolean {
+    try {
+        const parsed = JSON.parse(value || '{}')
+        return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+    } catch {
+        return false
+    }
+}
+
+function isJsonStringArray(value: string): boolean {
+    try {
+        const parsed = JSON.parse(value || '[]')
+        return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')
+    } catch {
+        return false
+    }
+}
 </script>
