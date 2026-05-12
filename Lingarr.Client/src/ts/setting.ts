@@ -50,6 +50,11 @@ export const SETTINGS = {
     MAX_RETRIES: 'max_retries',
     RETRY_DELAY: 'retry_delay',
     RETRY_DELAY_MULTIPLIER: 'retry_delay_multiplier',
+    SELECTIVE_RETRY_ENABLED: 'selective_retry_enabled',
+    SELECTIVE_RETRY_MAX_ATTEMPTS: 'selective_retry_max_attempts',
+    SELECTIVE_RETRY_HIGH_SEVERITY_ONLY: 'selective_retry_high_severity_only',
+    SELECTIVE_RETRY_PROVIDER_SCOPE: 'selective_retry_provider_scope',
+    SELECTIVE_RETRY_LOG_ATTEMPTS: 'selective_retry_log_attempts',
     AUTH_ENABLED: 'auth_enabled',
     ONBOARDING_COMPLETED: 'onboarding_completed',
     TELEMETRY_ENABLED: 'telemetry_enabled',
@@ -113,6 +118,11 @@ export interface ISettings {
     max_retries: string
     retry_delay: string
     retry_delay_multiplier: string
+    selective_retry_enabled: string
+    selective_retry_max_attempts: string
+    selective_retry_high_severity_only: string
+    selective_retry_provider_scope: string
+    selective_retry_log_attempts: string
     auth_enabled: string
     onboarding_completed: string
     telemetry_enabled: string

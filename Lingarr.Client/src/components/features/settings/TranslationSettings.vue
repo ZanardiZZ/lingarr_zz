@@ -67,6 +67,68 @@
                 v-model="retryDelayMultiplier"
                 :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
                 @update:validation="(val) => (isValid.retryDelayMultiplier = val)" />
+
+
+            <details class="rounded-lg border border-tertiary-content/20 p-3">
+                <summary class="cursor-pointer text-sm font-semibold text-primary-content">
+                    Selective retry (advanced)
+                </summary>
+
+                <div class="mt-3 flex flex-col space-y-3">
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Enable selective retry</span>
+                        Retry only suspicious subtitle cues after the main translation pass.
+                    </div>
+                    <ToggleButton v-model="selectiveRetryEnabled">
+                        <span class="text-sm font-medium text-primary-content">
+                            {{ selectiveRetryEnabled == 'true' ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    </ToggleButton>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Max retry attempts per cue (0-2)</span>
+                        Limits additional retries for each suspicious cue.
+                    </div>
+                    <InputComponent
+                        v-model="selectiveRetryMaxAttempts"
+                        :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
+                        @update:validation="(val) => (isValid.selectiveRetryMaxAttempts = val)" />
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Retry high severity only</span>
+                        Restricts selective retry to high-confidence issues only.
+                    </div>
+                    <ToggleButton v-model="selectiveRetryHighSeverityOnly">
+                        <span class="text-sm font-medium text-primary-content">
+                            {{ selectiveRetryHighSeverityOnly == 'true' ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    </ToggleButton>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Provider scope</span>
+                        Choose whether retries run only on LLM providers or all providers.
+                    </div>
+                    <select v-model="selectiveRetryProviderScope" class="select select-bordered w-full">
+                        <option value="llm_only">llm_only</option>
+                        <option value="all">all</option>
+                    </select>
+                    <span
+                        v-if="selectiveRetryProviderScope === 'all'"
+                        class="badge badge-warning w-fit text-xs">
+                        Warning: scope "all" can increase cost and processing time
+                    </span>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Log retry attempts</span>
+                        Enables structured retry attempt logging without subtitle text content.
+                    </div>
+                    <ToggleButton v-model="selectiveRetryLogAttempts">
+                        <span class="text-sm font-medium text-primary-content">
+                            {{ selectiveRetryLogAttempts == 'true' ? 'Enabled' : 'Disabled' }}
+                        </span>
+                    </ToggleButton>
+                </div>
+            </details>
         </template>
     </CardComponent>
 </template>
@@ -86,7 +148,8 @@ const isValid = reactive({
     maxBatchSize: true,
     maxRetries: true,
     retryDelay: true,
-    retryDelayMultiplier: true
+    retryDelayMultiplier: true,
+    selectiveRetryMaxAttempts: true
 })
 const serviceType = computed(() => settingsStore.getSetting(SETTINGS.SERVICE_TYPE))
 
@@ -130,6 +193,49 @@ const retryDelayMultiplier = computed({
             newValue,
             isValid.retryDelayMultiplier
         )
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryEnabled = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_ENABLED) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_ENABLED, newValue, true)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryMaxAttempts = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_MAX_ATTEMPTS) as string,
+    set: (newValue: string): void => {
+        const parsed = Number.parseInt(newValue, 10)
+        const inRange = Number.isFinite(parsed) && parsed >= 0 && parsed <= 2
+        isValid.selectiveRetryMaxAttempts = inRange
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_MAX_ATTEMPTS, newValue, inRange)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryHighSeverityOnly = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_HIGH_SEVERITY_ONLY) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_HIGH_SEVERITY_ONLY, newValue, true)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryProviderScope = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_PROVIDER_SCOPE) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_PROVIDER_SCOPE, newValue, true)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryLogAttempts = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_LOG_ATTEMPTS) as string,
+    set: (newValue: string): void => {
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_LOG_ATTEMPTS, newValue, true)
         saveNotification.value?.show()
     }
 })
