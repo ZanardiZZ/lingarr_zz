@@ -104,6 +104,94 @@ public class SubtitleSelectiveRetryServiceTests
         translationFactory.Verify(f => f.CreateTranslationService(It.IsAny<string>()), Times.Never);
     }
 
+    [Fact]
+    public async Task RetrySuspiciousLines_ThrowsWhenCancellationRequested()
+    {
+        var settings = BuildSettings();
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(new FakeTranslationService(_ => "Olá mundo"));
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("TARGET LINE TO TRANSLATE olá", "hello world");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, cts.Token));
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_ContinuesAfterTransientException()
+    {
+        var settings = BuildSettings(maxAttempts: "2");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var calls = 0;
+        var fake = new FakeTranslationService(_ =>
+        {
+            calls++;
+            if (calls == 1)
+            {
+                throw new InvalidOperationException("transient");
+            }
+
+            return "Olá mundo";
+        });
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("TARGET LINE TO TRANSLATE olá", "hello world");
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal("Olá mundo", result[0].TranslatedLines[0]);
+        Assert.Equal(2, fake.Calls);
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_PreservesSubtitleMetadata()
+    {
+        var settings = BuildSettings();
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(new FakeTranslationService(_ => "Olá mundo"));
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("TARGET LINE TO TRANSLATE olá", "hello world");
+        subtitle.Position = 42;
+        subtitle.StartTime = 1_250;
+        subtitle.EndTime = 3_000;
+
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+        var retried = result[0];
+
+        Assert.Equal(42, retried.Position);
+        Assert.Equal(1_250, retried.StartTime);
+        Assert.Equal(3_000, retried.EndTime);
+        Assert.Single(retried.TranslatedLines);
+    }
+
     private static Dictionary<string, string> BuildSettings(string maxAttempts = "1") => new()
     {
         [SettingKeys.Translation.SelectiveRetryEnabled] = "true",

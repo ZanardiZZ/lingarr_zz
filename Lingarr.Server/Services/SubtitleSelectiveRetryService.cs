@@ -62,9 +62,18 @@ public class SubtitleSelectiveRetryService(
         var translationService = translationServiceFactory.CreateTranslationService(serviceType);
         var translator = new SubtitleTranslationService(translationService, logger);
 
+        var retryAttemptedCount = 0;
+        var retryImprovedCount = 0;
+        var retryFailedCount = 0;
+        var retrySkippedCount = 0;
+
         foreach (var subtitle in translatedSubtitles)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var originalPosition = subtitle.Position;
+            var originalStartTime = subtitle.StartTime;
+            var originalEndTime = subtitle.EndTime;
+            var originalCueLineCount = subtitle.TranslatedLines.Count;
 
             for (var i = 0; i < subtitle.TranslatedLines.Count; i++)
             {
@@ -85,6 +94,7 @@ public class SubtitleSelectiveRetryService(
 
                 if (retryReasons.Count == 0)
                 {
+                    retrySkippedCount++;
                     if (logAttempts)
                     {
                         logger.LogInformation("Selective retry skipped. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, Reasons={Reasons}, Outcome=skipped_low_severity",
@@ -98,6 +108,7 @@ public class SubtitleSelectiveRetryService(
                 for (var attempt = 1; attempt <= maxAttempts; attempt++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    retryAttemptedCount++;
 
                     try
                     {
@@ -126,17 +137,21 @@ public class SubtitleSelectiveRetryService(
                             currentBest = retryCleaned;
                             currentReasons = retryReasonsDetected;
                             bestHighSeverityCount = retryHighSeverityCount;
+                            retryImprovedCount++;
                         }
 
                         if (logAttempts)
                         {
                             logger.LogInformation(
-                                "Selective retry attempt completed. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, Attempt={Attempt}, Improved={Improved}, ReasonsBefore={ReasonsBefore}, ReasonsAfter={ReasonsAfter}",
+                                "Selective retry attempt completed. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, StartTime={StartTime}, EndTime={EndTime}, Attempt={Attempt}, Improved={Improved}, Outcome={Outcome}, ReasonsBefore={ReasonsBefore}, ReasonsAfter={ReasonsAfter}",
                                 translationRequest.Id,
                                 subtitle.Position,
                                 i,
+                                subtitle.StartTime,
+                                subtitle.EndTime,
                                 attempt,
                                 improved,
+                                improved ? "improved" : "not_improved",
                                 string.Join(",", retryReasons),
                                 string.Join(",", retryReasonsDetected));
                         }
@@ -148,18 +163,38 @@ public class SubtitleSelectiveRetryService(
                     }
                     catch (Exception ex)
                     {
+                        retryFailedCount++;
                         logger.LogWarning(ex,
-                            "Selective retry failed. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, Attempt={Attempt}",
+                            "Selective retry failed. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, StartTime={StartTime}, EndTime={EndTime}, Attempt={Attempt}, Outcome=failed",
                             translationRequest.Id,
                             subtitle.Position,
                             i,
+                            subtitle.StartTime,
+                            subtitle.EndTime,
                             attempt);
                     }
                 }
 
                 subtitle.TranslatedLines[i] = currentBest;
             }
+
+            if (subtitle.Position != originalPosition
+                || subtitle.StartTime != originalStartTime
+                || subtitle.EndTime != originalEndTime
+                || subtitle.TranslatedLines.Count != originalCueLineCount)
+            {
+                throw new InvalidOperationException(
+                    $"Selective retry modified subtitle metadata invariants. RequestId={translationRequest.Id}, Position={originalPosition}");
+            }
         }
+
+        logger.LogInformation(
+            "Selective retry summary. RequestId={RequestId}, Attempted={Attempted}, Improved={Improved}, Failed={Failed}, Skipped={Skipped}",
+            translationRequest.Id,
+            retryAttemptedCount,
+            retryImprovedCount,
+            retryFailedCount,
+            retrySkippedCount);
 
         return translatedSubtitles;
     }
