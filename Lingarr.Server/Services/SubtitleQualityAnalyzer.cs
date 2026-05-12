@@ -1,10 +1,23 @@
 using System.Text.RegularExpressions;
 using Lingarr.Server.Interfaces.Services;
+using Lingarr.Server.Models;
 
 namespace Lingarr.Server.Services;
 
 public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
 {
+    private const int PromptLeakageWeight = 100;
+    private const int EmptyTranslationWeight = 90;
+    private const int AssistantLabelWeight = 80;
+    private const int CjkWeight = 70;
+    private const int RepeatedSegmentWeight = 65;
+    private const int ExcessiveLengthWeight = 60;
+    private const int PossibleEnglishLeftoverWeight = 35;
+    private const int CueStructureChangedWeight = 35;
+    private const int ChangedProperNounWeight = 30;
+    private const int MissingParentheticalCueWeight = 25;
+    private const int AddedSpeakerLabelWeight = 25;
+
     private static readonly string[] LeadingLabels =
     [
         "Translation in Portuguese:",
@@ -29,31 +42,50 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
     private static readonly HashSet<string> NonNameLeadingWords =
     ["I", "The", "A", "An", "We", "You", "He", "She", "They", "It", "This", "That"];
 
-    public List<string> GetSuspiciousReasons(string translatedLine, string sourceLine, string? targetLanguage)
+    private static readonly HashSet<string> EnglishStopWords =
+    [
+        "the", "and", "for", "you", "your", "are", "was", "were", "this", "that", "with", "have", "has",
+        "had", "not", "but", "from", "they", "them", "she", "him", "his", "her", "our", "out", "get",
+        "got", "can", "could", "would", "should", "will", "just", "now", "then", "than"
+    ];
+
+    private static readonly HashSet<string> TargetLanguageSignals =
+    [
+        "a", "ao", "aos", "as", "de", "da", "das", "do", "dos", "e", "em", "eu", "meu", "minha",
+        "na", "nas", "no", "nos", "o", "os", "para", "por", "que", "se", "um", "uma", "voce",
+        "usted", "vous", "avec", "pour", "dans", "und", "der", "die", "das", "nicht", "con", "per"
+    ];
+
+    public SubtitleQualityAnalysis Analyze(string translatedLine, string sourceLine, string? targetLanguage)
     {
-        var reasons = new List<string>();
+        var issues = new List<SubtitleQualityIssue>();
         var normalizedSource = NormalizeSpacing(sourceLine);
         var normalizedLine = NormalizeSpacing(translatedLine);
 
-        if (ContainsCjk(normalizedLine)) reasons.Add("cjk");
-        if (ContainsAny(normalizedLine, PromptLeakageMarkers)) reasons.Add("prompt_leakage");
-        if (ContainsAny(normalizedLine, LeadingLabels)) reasons.Add("assistant_label");
-        if (HasRepeatedSegment(normalizedLine)) reasons.Add("repeated_segment");
+        if (string.IsNullOrWhiteSpace(normalizedLine)) issues.Add(new SubtitleQualityIssue("empty_translation", EmptyTranslationWeight));
+        if (ContainsUnexpectedCjk(normalizedLine, normalizedSource, targetLanguage)) issues.Add(new SubtitleQualityIssue("cjk", CjkWeight));
+        if (ContainsAny(normalizedLine, PromptLeakageMarkers)) issues.Add(new SubtitleQualityIssue("prompt_leakage", PromptLeakageWeight));
+        if (ContainsAny(normalizedLine, LeadingLabels)) issues.Add(new SubtitleQualityIssue("assistant_label", AssistantLabelWeight));
+        if (HasRepeatedSegment(normalizedLine)) issues.Add(new SubtitleQualityIssue("repeated_segment", RepeatedSegmentWeight));
 
         if (!string.IsNullOrWhiteSpace(sourceLine)
             && normalizedLine.Length > 120
             && normalizedLine.Length > normalizedSource.Length * 4)
         {
-            reasons.Add("excessive_length");
+            issues.Add(new SubtitleQualityIssue("excessive_length", ExcessiveLengthWeight));
         }
 
-        if (HasEnglishLeftovers(normalizedLine, normalizedSource, targetLanguage)) reasons.Add("possible_english_leftover");
-        if (HasMissingParentheticalCue(normalizedLine, normalizedSource)) reasons.Add("missing_parenthetical_cue");
-        if (HasAddedSpeakerLabel(normalizedLine, normalizedSource)) reasons.Add("added_speaker_label");
-        if (HasLikelyChangedProperNoun(normalizedLine, normalizedSource)) reasons.Add("changed_proper_noun");
+        if (HasEnglishLeftovers(normalizedLine, normalizedSource, targetLanguage)) issues.Add(new SubtitleQualityIssue("possible_english_leftover", PossibleEnglishLeftoverWeight));
+        if (HasMissingParentheticalCue(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("missing_parenthetical_cue", MissingParentheticalCueWeight));
+        if (HasAddedSpeakerLabel(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("added_speaker_label", AddedSpeakerLabelWeight));
+        if (HasCueStructureChanged(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("cue_structure_changed", CueStructureChangedWeight));
+        if (HasLikelyChangedProperNoun(normalizedLine, normalizedSource)) issues.Add(new SubtitleQualityIssue("changed_proper_noun", ChangedProperNounWeight));
 
-        return reasons;
+        return new SubtitleQualityAnalysis(issues);
     }
+
+    public List<string> GetSuspiciousReasons(string translatedLine, string sourceLine, string? targetLanguage)
+        => Analyze(translatedLine, sourceLine, targetLanguage).Reasons;
 
     private static bool ContainsAny(string line, IEnumerable<string> terms)
     {
@@ -71,18 +103,36 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         return normalized.Trim();
     }
 
-    private static bool ContainsCjk(string line)
+    private static bool ContainsUnexpectedCjk(string line, string sourceLine, string? targetLanguage)
     {
+        if (IsCjkLanguage(targetLanguage)) return false;
+
+        var lineCjkCount = CountCjk(line);
+        if (lineCjkCount == 0) return false;
+
+        var sourceCjkCount = CountCjk(sourceLine);
+        if (sourceCjkCount == 0) return true;
+
+        var cjkRatio = lineCjkCount / (double)Math.Max(1, line.EnumerateRunes().Count());
+        return lineCjkCount > sourceCjkCount || cjkRatio > 0.35;
+    }
+
+    private static int CountCjk(string line)
+    {
+        var count = 0;
         foreach (var rune in line.EnumerateRunes())
         {
             var value = rune.Value;
             if ((value >= 0x4E00 && value <= 0x9FFF)
                 || (value >= 0x3400 && value <= 0x4DBF)
                 || (value >= 0x3040 && value <= 0x30FF)
-                || (value >= 0xAC00 && value <= 0xD7AF)) return true;
+                || (value >= 0xAC00 && value <= 0xD7AF))
+            {
+                count++;
+            }
         }
 
-        return false;
+        return count;
     }
 
     private static bool HasRepeatedSegment(string line)
@@ -111,14 +161,38 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         if (IsEnglishLanguage(targetLanguage)) return false;
         if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(sourceLine)) return false;
 
-        var sourceWords = EnglishWordRegex().Matches(sourceLine).Select(m => m.Value.ToLowerInvariant()).ToHashSet();
+        var sourceWords = EnglishWordRegex().Matches(sourceLine)
+            .Where(match => !IsLikelyProtectedEnglishToken(match.Value, match.Index))
+            .Select(match => match.Value.ToLowerInvariant())
+            .Where(IsContentWord)
+            .ToHashSet();
         if (sourceWords.Count == 0) return false;
 
-        var lineWords = EnglishWordRegex().Matches(line).Select(m => m.Value.ToLowerInvariant()).ToList();
+        var lineWords = EnglishWordRegex().Matches(line)
+            .Select(m => m.Value.ToLowerInvariant())
+            .ToList();
         if (lineWords.Count == 0) return false;
 
-        var overlap = lineWords.Count(word => sourceWords.Contains(word));
-        return overlap >= 3 && overlap >= Math.Max(3, sourceWords.Count / 2);
+        var lineContentWords = lineWords.Where(IsContentWord).ToList();
+        var overlap = lineContentWords.Count(word => sourceWords.Contains(word));
+        if (overlap == 0) return false;
+
+        var copiedRatio = overlap / (double)Math.Max(1, sourceWords.Count);
+        var hasTargetLanguageSignals = lineWords.Any(word => TargetLanguageSignals.Contains(RemoveDiacritics(word)));
+        if (hasTargetLanguageSignals && overlap < 4 && copiedRatio < 0.70) return false;
+
+        return overlap >= 4 && copiedRatio >= 0.55;
+    }
+
+    private static bool IsContentWord(string word)
+        => word.Length >= 3 && !EnglishStopWords.Contains(word);
+
+    private static bool IsLikelyProtectedEnglishToken(string word, int index)
+    {
+        if (word.Length <= 1) return false;
+        if (word.All(c => !char.IsLetter(c) || char.IsUpper(c))) return true;
+        if (word.Skip(1).Any(char.IsUpper)) return true;
+        return index > 0 && char.IsUpper(word[0]);
     }
 
     private static bool HasMissingParentheticalCue(string line, string sourceLine)
@@ -138,6 +212,24 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         var sourceHasLabel = SpeakerLabelRegex().IsMatch(sourceLine);
         var lineHasLabel = SpeakerLabelRegex().IsMatch(line);
         return !sourceHasLabel && lineHasLabel;
+    }
+
+    private static bool HasCueStructureChanged(string line, string sourceLine)
+    {
+        if (string.IsNullOrWhiteSpace(sourceLine) || string.IsNullOrWhiteSpace(line)) return false;
+
+        var sourceHasCue = ParentheticalCueRegex().IsMatch(sourceLine)
+            || BracketCueRegex().IsMatch(sourceLine)
+            || AsteriskCueRegex().IsMatch(sourceLine)
+            || SpeakerLabelRegex().IsMatch(sourceLine);
+        if (!sourceHasCue) return false;
+
+        var lineHasCue = ParentheticalCueRegex().IsMatch(line)
+            || BracketCueRegex().IsMatch(line)
+            || AsteriskCueRegex().IsMatch(line)
+            || SpeakerLabelRegex().IsMatch(line);
+
+        return !lineHasCue;
     }
 
     private static bool HasLikelyChangedProperNoun(string line, string sourceLine)
@@ -171,6 +263,20 @@ public partial class SubtitleQualityAnalyzer : ISubtitleQualityAnalyzer
         if (string.IsNullOrWhiteSpace(language)) return false;
         var normalized = language.Trim().ToLowerInvariant();
         return normalized is "en" or "eng" or "english";
+    }
+
+    private static bool IsCjkLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language)) return false;
+        var normalized = language.Trim().ToLowerInvariant();
+        return normalized is "zh" or "zho" or "chi" or "chinese" or "ja" or "jpn" or "japanese" or "ko" or "kor" or "korean";
+    }
+
+    private static string RemoveDiacritics(string value)
+    {
+        var normalized = value.Normalize(System.Text.NormalizationForm.FormD);
+        var chars = normalized.Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark);
+        return new string(chars.ToArray()).Normalize(System.Text.NormalizationForm.FormC);
     }
 
     [GeneratedRegex(@"\s{2,}")]

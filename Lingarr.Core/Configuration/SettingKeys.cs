@@ -94,6 +94,8 @@ public static class SettingKeys
         public const string SelectiveRetryHighSeverityOnly = "selective_retry_high_severity_only";
         public const string SelectiveRetryProviderScope = "selective_retry_provider_scope";
         public const string SelectiveRetryLogAttempts = "selective_retry_log_attempts";
+        public const string SelectiveRetryScoreThreshold = "selective_retry_score_threshold";
+        public const string SelectiveRetryImprovementMargin = "selective_retry_improvement_margin";
     }
 
     public static class Automation

@@ -65,6 +65,58 @@ public class SubtitleSelectiveRetryServiceTests
     }
 
     [Fact]
+    public async Task RetrySuspiciousLines_RetriesLowSeverity_WhenThresholdAllows()
+    {
+        var settings = BuildSettings(highSeverityOnly: "false", scoreThreshold: "30");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var fake = new FakeTranslationService(_ => "Eu preciso encontrar meu irmao");
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var line = "I need to find my brother right now";
+        var subtitle = BuildSubtitle(line, line);
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal("Eu preciso encontrar meu irmao", result[0].TranslatedLines[0]);
+        Assert.Equal(1, fake.Calls);
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_SkipsWhenScoreBelowConfiguredThreshold()
+    {
+        var settings = BuildSettings(highSeverityOnly: "false", scoreThreshold: "50");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var fake = new FakeTranslationService(_ => "changed");
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var line = "I need to find my brother right now";
+        var subtitle = BuildSubtitle(line, line);
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal(line, result[0].TranslatedLines[0]);
+        Assert.Equal(0, fake.Calls);
+    }
+
+    [Fact]
     public async Task RetrySuspiciousLines_RespectsMaxAttempts_AndFallback()
     {
         var settings = BuildSettings(maxAttempts: "1");
@@ -86,6 +138,31 @@ public class SubtitleSelectiveRetryServiceTests
         var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
 
         Assert.Equal("检查中...", result[0].TranslatedLines[0]);
+        Assert.Equal(1, fake.Calls);
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_KeepsFallback_WhenScoreDoesNotImproveByMargin()
+    {
+        var settings = BuildSettings(improvementMargin: "30");
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        var fake = new FakeTranslationService(_ => "Translation: Ola mundo");
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(fake);
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("TARGET LINE TO TRANSLATE ola", "hello world");
+        var result = await service.RetrySuspiciousLines([subtitle], BuildRequest(), "openai", false, CancellationToken.None);
+
+        Assert.Equal("TARGET LINE TO TRANSLATE ola", result[0].TranslatedLines[0]);
         Assert.Equal(1, fake.Calls);
     }
 
@@ -239,13 +316,19 @@ public class SubtitleSelectiveRetryServiceTests
         Assert.Equal(1, reasonCounts["prompt_leakage"]);
     }
 
-    private static Dictionary<string, string> BuildSettings(string maxAttempts = "1") => new()
+    private static Dictionary<string, string> BuildSettings(
+        string maxAttempts = "1",
+        string highSeverityOnly = "true",
+        string scoreThreshold = "25",
+        string improvementMargin = "10") => new()
     {
         [SettingKeys.Translation.SelectiveRetryEnabled] = "true",
         [SettingKeys.Translation.SelectiveRetryMaxAttempts] = maxAttempts,
-        [SettingKeys.Translation.SelectiveRetryHighSeverityOnly] = "true",
+        [SettingKeys.Translation.SelectiveRetryHighSeverityOnly] = highSeverityOnly,
         [SettingKeys.Translation.SelectiveRetryProviderScope] = "llm_only",
-        [SettingKeys.Translation.SelectiveRetryLogAttempts] = "true"
+        [SettingKeys.Translation.SelectiveRetryLogAttempts] = "true",
+        [SettingKeys.Translation.SelectiveRetryScoreThreshold] = scoreThreshold,
+        [SettingKeys.Translation.SelectiveRetryImprovementMargin] = improvementMargin
     };
 
     private static TranslationRequest BuildRequest() => new()

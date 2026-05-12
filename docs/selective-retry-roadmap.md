@@ -105,7 +105,7 @@ This roadmap documents the next steps to complete the feature, with a focus on U
 
 ---
 
-## Phase 4 — Quality improvements (analyzer + decisioning)
+## Phase 4 — Quality improvements (analyzer + decisioning) ✅ Implemented (May 12, 2026)
 
 ### Goals
 - Reduce false positives.

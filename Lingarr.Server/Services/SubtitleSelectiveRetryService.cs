@@ -18,8 +18,7 @@ public class SubtitleSelectiveRetryService(
     ITranslationServiceFactory translationServiceFactory,
     ISubtitleQualityAnalyzer subtitleQualityAnalyzer) : ISubtitleSelectiveRetryService
 {
-    private static readonly HashSet<string> HighSeverityReasons =
-    ["prompt_leakage", "assistant_label", "cjk", "repeated_segment", "excessive_length"];
+    private const int HighSeverityScoreFloor = 60;
 
     private static readonly HashSet<string> LlmProviderScope =
     ["openai", "localai", "gemini", "anthropic", "deepseek"];
@@ -36,7 +35,9 @@ public class SubtitleSelectiveRetryService(
             SettingKeys.Translation.SelectiveRetryMaxAttempts,
             SettingKeys.Translation.SelectiveRetryHighSeverityOnly,
             SettingKeys.Translation.SelectiveRetryProviderScope,
-            SettingKeys.Translation.SelectiveRetryLogAttempts
+            SettingKeys.Translation.SelectiveRetryLogAttempts,
+            SettingKeys.Translation.SelectiveRetryScoreThreshold,
+            SettingKeys.Translation.SelectiveRetryImprovementMargin
         ]);
 
         if (!ParseBool(settings, SettingKeys.Translation.SelectiveRetryEnabled, true))
@@ -57,6 +58,11 @@ public class SubtitleSelectiveRetryService(
         var maxAttempts = int.TryParse(settings[SettingKeys.Translation.SelectiveRetryMaxAttempts], out var parsedAttempts)
             ? Math.Clamp(parsedAttempts, 0, 2)
             : 1;
+        var configuredScoreThreshold = ParseInt(settings, SettingKeys.Translation.SelectiveRetryScoreThreshold, 25, 0, 200);
+        var retryScoreThreshold = highSeverityOnly
+            ? Math.Max(configuredScoreThreshold, HighSeverityScoreFloor)
+            : configuredScoreThreshold;
+        var improvementMargin = ParseInt(settings, SettingKeys.Translation.SelectiveRetryImprovementMargin, 10, 0, 100);
 
         if (maxAttempts <= 0)
         {
@@ -86,7 +92,8 @@ public class SubtitleSelectiveRetryService(
 
                 var sourceLine = GetSourceLine(subtitle, i, stripSubtitleFormatting);
                 var currentBest = subtitle.TranslatedLines[i] ?? string.Empty;
-                var currentReasons = subtitleQualityAnalyzer.GetSuspiciousReasons(currentBest, sourceLine, translationRequest.TargetLanguage);
+                var currentAnalysis = subtitleQualityAnalyzer.Analyze(currentBest, sourceLine, translationRequest.TargetLanguage);
+                var currentReasons = currentAnalysis.Reasons;
 
                 if (currentReasons.Count == 0)
                 {
@@ -95,22 +102,21 @@ public class SubtitleSelectiveRetryService(
 
                 CountReasons(retryReasonCounts, currentReasons);
 
-                var retryReasons = highSeverityOnly
-                    ? currentReasons.Where(r => HighSeverityReasons.Contains(r)).ToList()
-                    : currentReasons;
-
-                if (retryReasons.Count == 0)
+                if (currentAnalysis.Score < retryScoreThreshold)
                 {
                     retrySkippedCount++;
                     if (logAttempts)
                     {
-                        logger.LogInformation("Selective retry skipped. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, Reasons={Reasons}, Outcome=skipped_low_severity",
-                            translationRequest.Id, subtitle.Position, i, string.Join(",", currentReasons));
+                        logger.LogInformation("Selective retry skipped. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, Score={Score}, Threshold={Threshold}, Reasons={Reasons}, Outcome=skipped_below_threshold",
+                            translationRequest.Id,
+                            subtitle.Position,
+                            i,
+                            currentAnalysis.Score,
+                            retryScoreThreshold,
+                            string.Join(",", currentReasons));
                     }
                     continue;
                 }
-
-                var bestHighSeverityCount = CountHighSeverity(currentReasons);
 
                 for (var attempt = 1; attempt <= maxAttempts; attempt++)
                 {
@@ -119,7 +125,7 @@ public class SubtitleSelectiveRetryService(
 
                     try
                     {
-                        var retryPrompt = BuildRetryPrompt(sourceLine, currentBest, retryReasons, translationRequest.TargetLanguage);
+                        var retryPrompt = BuildRetryPrompt(sourceLine, currentBest, currentReasons, translationRequest.TargetLanguage);
                         var retryRaw = await translator.TranslateSubtitleLine(new TranslateAbleSubtitleLine
                         {
                             SubtitleLine = retryPrompt,
@@ -131,26 +137,29 @@ public class SubtitleSelectiveRetryService(
                             ? SubtitleFormatterService.RemoveMarkup(retryRaw)
                             : retryRaw.Trim();
 
-                        var retryReasonsDetected = subtitleQualityAnalyzer.GetSuspiciousReasons(retryCleaned, sourceLine, translationRequest.TargetLanguage);
-                        var retryHighSeverityCount = CountHighSeverity(retryReasonsDetected);
+                        var retryAnalysis = subtitleQualityAnalyzer.Analyze(retryCleaned, sourceLine, translationRequest.TargetLanguage);
+                        var retryReasonsDetected = retryAnalysis.Reasons;
+                        var analysisBeforeRetry = currentAnalysis;
+                        var reasonsBeforeRetry = currentReasons;
 
-                        var improved = retryHighSeverityCount < bestHighSeverityCount
-                                       || (retryHighSeverityCount == bestHighSeverityCount
-                                           && retryReasonsDetected.Count < currentReasons.Count
-                                           && !string.IsNullOrWhiteSpace(retryCleaned));
+                        var improved = IsMeaningfullyImproved(
+                            retryCleaned,
+                            analysisBeforeRetry,
+                            retryAnalysis,
+                            improvementMargin);
 
                         if (improved)
                         {
                             currentBest = retryCleaned;
+                            currentAnalysis = retryAnalysis;
                             currentReasons = retryReasonsDetected;
-                            bestHighSeverityCount = retryHighSeverityCount;
                             retryImprovedCount++;
                         }
 
                         if (logAttempts)
                         {
                             logger.LogInformation(
-                                "Selective retry attempt completed. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, StartTime={StartTime}, EndTime={EndTime}, Attempt={Attempt}, Improved={Improved}, Outcome={Outcome}, ReasonsBefore={ReasonsBefore}, ReasonsAfter={ReasonsAfter}",
+                                "Selective retry attempt completed. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, StartTime={StartTime}, EndTime={EndTime}, Attempt={Attempt}, Improved={Improved}, Outcome={Outcome}, ScoreBefore={ScoreBefore}, ScoreAfter={ScoreAfter}, Margin={Margin}, ReasonsBefore={ReasonsBefore}, ReasonsAfter={ReasonsAfter}",
                                 translationRequest.Id,
                                 subtitle.Position,
                                 i,
@@ -159,11 +168,14 @@ public class SubtitleSelectiveRetryService(
                                 attempt,
                                 improved,
                                 improved ? "improved" : "not_improved",
-                                string.Join(",", retryReasons),
+                                analysisBeforeRetry.Score,
+                                retryAnalysis.Score,
+                                improvementMargin,
+                                string.Join(",", reasonsBeforeRetry),
                                 string.Join(",", retryReasonsDetected));
                         }
 
-                        if (bestHighSeverityCount == 0)
+                        if (currentAnalysis.Score < retryScoreThreshold)
                         {
                             break;
                         }
@@ -218,8 +230,29 @@ public class SubtitleSelectiveRetryService(
     private static bool ParseBool(Dictionary<string, string> settings, string key, bool defaultValue)
         => settings.TryGetValue(key, out var value) ? value == "true" : defaultValue;
 
-    private static int CountHighSeverity(IEnumerable<string> reasons)
-        => reasons.Count(reason => HighSeverityReasons.Contains(reason));
+    private static int ParseInt(Dictionary<string, string> settings, string key, int defaultValue, int min, int max)
+    {
+        if (!settings.TryGetValue(key, out var value) || !int.TryParse(value, out var parsed))
+        {
+            return defaultValue;
+        }
+
+        return Math.Clamp(parsed, min, max);
+    }
+
+    private static bool IsMeaningfullyImproved(
+        string retryCleaned,
+        SubtitleQualityAnalysis currentAnalysis,
+        SubtitleQualityAnalysis retryAnalysis,
+        int improvementMargin)
+    {
+        if (string.IsNullOrWhiteSpace(retryCleaned))
+        {
+            return false;
+        }
+
+        return retryAnalysis.Score + improvementMargin <= currentAnalysis.Score;
+    }
 
     private static void CountReasons(Dictionary<string, int> reasonCounts, IEnumerable<string> reasons)
     {

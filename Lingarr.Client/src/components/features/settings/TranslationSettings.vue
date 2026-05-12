@@ -96,13 +96,31 @@
 
                     <div class="flex flex-col">
                         <span class="font-semibold">Retry high severity only</span>
-                        Restricts selective retry to high-confidence issues only.
+                        Requires the weighted score to reach the high-severity floor.
                     </div>
                     <ToggleButton v-model="selectiveRetryHighSeverityOnly">
                         <span class="text-sm font-medium text-primary-content">
                             {{ selectiveRetryHighSeverityOnly == 'true' ? 'Enabled' : 'Disabled' }}
                         </span>
                     </ToggleButton>
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Score threshold (0-200)</span>
+                        Minimum analyzer score required before a cue is retried.
+                    </div>
+                    <InputComponent
+                        v-model="selectiveRetryScoreThreshold"
+                        :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
+                        @update:validation="(val) => (isValid.selectiveRetryScoreThreshold = val)" />
+
+                    <div class="flex flex-col">
+                        <span class="font-semibold">Improvement margin (0-100)</span>
+                        Minimum score improvement required before a retry replaces the original.
+                    </div>
+                    <InputComponent
+                        v-model="selectiveRetryImprovementMargin"
+                        :validation-type="INPUT_VALIDATION_TYPE.NUMBER"
+                        @update:validation="(val) => (isValid.selectiveRetryImprovementMargin = val)" />
 
                     <div class="flex flex-col">
                         <span class="font-semibold">Provider scope</span>
@@ -149,7 +167,9 @@ const isValid = reactive({
     maxRetries: true,
     retryDelay: true,
     retryDelayMultiplier: true,
-    selectiveRetryMaxAttempts: true
+    selectiveRetryMaxAttempts: true,
+    selectiveRetryScoreThreshold: true,
+    selectiveRetryImprovementMargin: true
 })
 const serviceType = computed(() => settingsStore.getSetting(SETTINGS.SERVICE_TYPE))
 
@@ -220,6 +240,28 @@ const selectiveRetryHighSeverityOnly = computed({
     get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_HIGH_SEVERITY_ONLY) as string,
     set: (newValue: string): void => {
         settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_HIGH_SEVERITY_ONLY, newValue, true)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryScoreThreshold = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_SCORE_THRESHOLD) as string,
+    set: (newValue: string): void => {
+        const parsed = Number.parseInt(newValue, 10)
+        const inRange = Number.isFinite(parsed) && parsed >= 0 && parsed <= 200
+        isValid.selectiveRetryScoreThreshold = inRange
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_SCORE_THRESHOLD, newValue, inRange)
+        saveNotification.value?.show()
+    }
+})
+
+const selectiveRetryImprovementMargin = computed({
+    get: (): string => settingsStore.getSetting(SETTINGS.SELECTIVE_RETRY_IMPROVEMENT_MARGIN) as string,
+    set: (newValue: string): void => {
+        const parsed = Number.parseInt(newValue, 10)
+        const inRange = Number.isFinite(parsed) && parsed >= 0 && parsed <= 100
+        isValid.selectiveRetryImprovementMargin = inRange
+        settingsStore.updateSetting(SETTINGS.SELECTIVE_RETRY_IMPROVEMENT_MARGIN, newValue, inRange)
         saveNotification.value?.show()
     }
 })
