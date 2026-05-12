@@ -89,6 +89,11 @@ public static class SettingKeys
         public const string RetryDelayMultiplier = "retry_delay_multiplier";
         public const string NavigateToDetailsOnRequest = "navigate_to_details_on_request";
         public const string LanguageCodeFormat = "language_code_format";
+        public const string SelectiveRetryEnabled = "selective_retry_enabled";
+        public const string SelectiveRetryMaxAttempts = "selective_retry_max_attempts";
+        public const string SelectiveRetryHighSeverityOnly = "selective_retry_high_severity_only";
+        public const string SelectiveRetryProviderScope = "selective_retry_provider_scope";
+        public const string SelectiveRetryLogAttempts = "selective_retry_log_attempts";
     }
 
     public static class Automation
