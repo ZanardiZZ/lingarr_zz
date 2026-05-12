@@ -46,6 +46,16 @@ This roadmap documents the next steps to complete the feature, with a focus on U
    - Add tests for transient provider exception + fallback continuity.
    - Add tests validating unchanged cue metadata after retries.
 
+
+
+### Test dataset notes (May 12, 2026)
+- A baseline set of **8 subtitle pairs** (EN original + pt-BR translated by local LLM) was added for selective-retry validation.
+- Use these pairs to compare:
+  - suspicious-line detection precision
+  - retry improvement rate vs conservative fallback
+  - timestamp/index/ordering invariants before vs after retry
+- Recommendation: run all Phase 1 expansion tests against this corpus before enabling broader UI rollout.
+
 ---
 
 ## Phase 2 — UI configuration (minimal)
