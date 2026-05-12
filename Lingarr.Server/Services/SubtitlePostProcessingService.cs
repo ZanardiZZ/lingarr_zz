@@ -176,35 +176,116 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
     private static List<string> GetSuspiciousReasons(string line, string sourceLine)
     {
         var reasons = new List<string>();
+        var normalizedSource = NormalizeSpacing(sourceLine);
+        var normalizedLine = NormalizeSpacing(line);
 
-        if (ContainsCjk(line))
+        if (ContainsCjk(normalizedLine))
         {
             reasons.Add("cjk");
         }
 
-        if (ContainsAny(line, PromptLeakageMarkers))
+        if (ContainsAny(normalizedLine, PromptLeakageMarkers))
         {
             reasons.Add("prompt_leakage");
         }
 
-        if (ContainsAny(line, LeadingLabels))
+        if (ContainsAny(normalizedLine, LeadingLabels))
         {
             reasons.Add("assistant_label");
         }
 
-        if (HasRepeatedSegment(line))
+        if (HasRepeatedSegment(normalizedLine))
         {
             reasons.Add("repeated_segment");
         }
 
         if (!string.IsNullOrWhiteSpace(sourceLine)
-            && line.Length > 120
-            && line.Length > sourceLine.Length * 4)
+            && normalizedLine.Length > 120
+            && normalizedLine.Length > normalizedSource.Length * 4)
         {
             reasons.Add("excessive_length");
         }
 
+        if (HasEnglishLeftovers(normalizedLine, normalizedSource))
+        {
+            reasons.Add("possible_english_leftover");
+        }
+
+        if (HasMissingParentheticalCue(normalizedLine, normalizedSource))
+        {
+            reasons.Add("missing_parenthetical_cue");
+        }
+
+        if (HasAddedSpeakerLabel(normalizedLine, normalizedSource))
+        {
+            reasons.Add("added_speaker_label");
+        }
+
+        if (HasLikelyChangedProperNoun(normalizedLine, normalizedSource))
+        {
+            reasons.Add("changed_proper_noun");
+        }
+
         return reasons;
+    }
+
+    private static bool HasEnglishLeftovers(string line, string sourceLine)
+    {
+        if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(sourceLine))
+        {
+            return false;
+        }
+
+        var sourceWords = EnglishWordRegex().Matches(sourceLine).Select(m => m.Value.ToLowerInvariant()).ToHashSet();
+        if (sourceWords.Count == 0)
+        {
+            return false;
+        }
+
+        var lineWords = EnglishWordRegex().Matches(line).Select(m => m.Value.ToLowerInvariant()).ToList();
+        if (lineWords.Count == 0)
+        {
+            return false;
+        }
+
+        var overlap = lineWords.Count(word => sourceWords.Contains(word));
+        return overlap >= 3 && overlap >= Math.Max(3, sourceWords.Count / 2);
+    }
+
+    private static bool HasMissingParentheticalCue(string line, string sourceLine)
+    {
+        var sourceHasCue = ParentheticalCueRegex().IsMatch(sourceLine);
+        if (!sourceHasCue)
+        {
+            return false;
+        }
+
+        return !ParentheticalCueRegex().IsMatch(line);
+    }
+
+    private static bool HasAddedSpeakerLabel(string line, string sourceLine)
+    {
+        var sourceHasLabel = SpeakerLabelRegex().IsMatch(sourceLine);
+        var lineHasLabel = SpeakerLabelRegex().IsMatch(line);
+        return !sourceHasLabel && lineHasLabel;
+    }
+
+    private static bool HasLikelyChangedProperNoun(string line, string sourceLine)
+    {
+        if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(sourceLine))
+        {
+            return false;
+        }
+
+        var sourceNames = ProperNounRegex().Matches(sourceLine).Select(m => m.Value).Distinct(StringComparer.Ordinal).ToList();
+        if (sourceNames.Count == 0)
+        {
+            return false;
+        }
+
+        var lineNameSet = ProperNounRegex().Matches(line).Select(m => m.Value).ToHashSet(StringComparer.Ordinal);
+        var missingNames = sourceNames.Count(name => !lineNameSet.Contains(name));
+        return missingNames > 0;
     }
 
     private static bool ContainsAny(string line, IEnumerable<string> terms)
@@ -274,4 +355,16 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
 
     [GeneratedRegex(@"\s+([,.;:!?])")]
     private static partial Regex SpaceBeforePunctuationRegex();
+
+    [GeneratedRegex(@"\b[A-Za-z][A-Za-z'’-]{2,}\b")]
+    private static partial Regex EnglishWordRegex();
+
+    [GeneratedRegex(@"\((?:[^)]{1,30})\)")]
+    private static partial Regex ParentheticalCueRegex();
+
+    [GeneratedRegex(@"^\s*(?:[A-Z][A-Za-z]{1,20}|[A-Z]{2,20})\s*:\s+")]
+    private static partial Regex SpeakerLabelRegex();
+
+    [GeneratedRegex(@"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b")]
+    private static partial Regex ProperNounRegex();
 }

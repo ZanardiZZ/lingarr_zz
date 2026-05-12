@@ -115,6 +115,50 @@ public class SubtitlePostProcessingServiceTests
     }
 
     [Fact]
+    public async Task Process_LogsSuspicious_WhenEnglishLeftoversDetected()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine("I need to find my brother right now", "I need to find my brother right now", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("possible_english_leftover"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenParentheticalCueMissing()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine("Ele chegou", "(whispering) He arrived", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("missing_parenthetical_cue"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenSpeakerLabelAdded()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine("JOHN: Vamos.", "Let's go.", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("added_speaker_label"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenProperNounLikelyChanged()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine("Marta chegou agora.", "Maria arrived now.", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("changed_proper_noun"));
+    }
+
+    [Fact]
     public async Task Process_CleansRealWorldExample_AssistantLabelAndTrailingNote()
     {
         var result = await ProcessSingleLine(
