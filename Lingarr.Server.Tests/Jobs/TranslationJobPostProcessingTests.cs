@@ -101,6 +101,15 @@ public class TranslationJobPostProcessingTests
                 return subs;
             });
 
+        var selectiveRetry = new Mock<ISubtitleSelectiveRetryService>();
+        selectiveRetry.Setup(r => r.RetrySuspiciousLines(
+                It.IsAny<List<SubtitleItem>>(),
+                It.IsAny<TranslationRequest>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((List<SubtitleItem> subs, TranslationRequest _, string _, bool _, CancellationToken _) => subs);
+
         var job = new TranslationJob(
             NullLogger<TranslationJob>.Instance,
             settingService.Object,
@@ -112,11 +121,12 @@ public class TranslationJobPostProcessingTests
             translationFactory.Object,
             translationRequestService.Object,
             Mock.Of<ITranslationRequestEventService>(),
-            postProcessor.Object);
+            postProcessor.Object,
+            selectiveRetry.Object);
 
         await job.Execute(translationRequest, CancellationToken.None);
 
-        postProcessor.Verify(p => p.Process(It.IsAny<List<SubtitleItem>>(), translationRequest, It.IsAny<CancellationToken>()), Times.Once);
+        postProcessor.Verify(p => p.Process(It.IsAny<List<SubtitleItem>>(), translationRequest, It.IsAny<CancellationToken>()), Times.Exactly(2));
         Assert.NotNull(writtenSubtitles);
         Assert.Equal("post-processed", writtenSubtitles![0].TranslatedLines![0]);
     }

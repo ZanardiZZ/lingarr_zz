@@ -158,6 +158,7 @@ public static class ServiceCollectionExtensions
         builder.Services.AddScoped<ISubtitleService, SubtitleService>();
         builder.Services.AddSingleton<ISubtitleQualityAnalyzer, SubtitleQualityAnalyzer>();
         builder.Services.AddScoped<ISubtitlePostProcessingService, SubtitlePostProcessingService>();
+        builder.Services.AddScoped<ISubtitleSelectiveRetryService, SubtitleSelectiveRetryService>();
         builder.Services.AddScoped<ITranslationRequestService, TranslationRequestService>();
         builder.Services.AddScoped<ITranslationRequestEventService, TranslationRequestEventService>();
         builder.Services.AddScoped<IMediaSubtitleProcessor, MediaSubtitleProcessor>();
