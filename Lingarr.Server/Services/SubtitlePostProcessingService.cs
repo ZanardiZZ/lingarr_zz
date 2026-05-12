@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using Lingarr.Core.Entities;
 using Lingarr.Server.Interfaces.Services;
@@ -7,8 +6,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Lingarr.Server.Services;
 
-public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessingService> logger) : ISubtitlePostProcessingService
+public partial class SubtitlePostProcessingService(
+    ILogger<SubtitlePostProcessingService> logger,
+    ISubtitleQualityAnalyzer subtitleQualityAnalyzer) : ISubtitlePostProcessingService
 {
+    private const int MaxPerLineWarnings = 25;
+
     private static readonly string[] LeadingLabels =
     [
         "Translation in Portuguese:",
@@ -37,6 +40,7 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
         CancellationToken cancellationToken = default)
     {
         var suspiciousCount = 0;
+        var perReasonCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var subtitle in translatedSubtitles)
         {
@@ -50,10 +54,24 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
 
                 subtitle.TranslatedLines[i] = cleanedLine;
 
-                var suspiciousReasons = GetSuspiciousReasons(cleanedLine, sourceLine);
-                if (suspiciousReasons.Count > 0)
+                var suspiciousReasons = subtitleQualityAnalyzer.GetSuspiciousReasons(
+                    cleanedLine,
+                    sourceLine,
+                    translationRequest.TargetLanguage);
+
+                if (suspiciousReasons.Count == 0)
                 {
-                    suspiciousCount++;
+                    continue;
+                }
+
+                suspiciousCount++;
+                foreach (var reason in suspiciousReasons)
+                {
+                    perReasonCounts[reason] = perReasonCounts.GetValueOrDefault(reason) + 1;
+                }
+
+                if (suspiciousCount <= MaxPerLineWarnings)
+                {
                     logger.LogWarning(
                         "Suspicious translated subtitle content detected. RequestId={RequestId}, Position={Position}, LineIndex={LineIndex}, Reasons={Reasons}",
                         translationRequest.Id,
@@ -67,9 +85,18 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
         if (suspiciousCount > 0)
         {
             logger.LogInformation(
-                "Subtitle post-processing flagged suspicious lines. RequestId={RequestId}, Count={Count}",
+                "Subtitle post-processing flagged suspicious lines. RequestId={RequestId}, Count={Count}, Reasons={Reasons}",
                 translationRequest.Id,
-                suspiciousCount);
+                suspiciousCount,
+                string.Join(",", perReasonCounts.Select(x => $"{x.Key}:{x.Value}")));
+
+            if (suspiciousCount > MaxPerLineWarnings)
+            {
+                logger.LogInformation(
+                    "Suppressed additional suspicious line warnings. RequestId={RequestId}, SuppressedCount={SuppressedCount}",
+                    translationRequest.Id,
+                    suspiciousCount - MaxPerLineWarnings);
+            }
         }
 
         return Task.FromResult(translatedSubtitles);
@@ -139,31 +166,16 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
 
     private static string UnwrapLineQuotesIfNeeded(string input, string sourceLine)
     {
-        if (string.IsNullOrWhiteSpace(input))
-        {
-            return input;
-        }
-
-        if (!IsWrappedInQuotes(input) || IsWrappedInQuotes(sourceLine))
-        {
-            return input;
-        }
-
+        if (string.IsNullOrWhiteSpace(input)) return input;
+        if (!IsWrappedInQuotes(input) || IsWrappedInQuotes(sourceLine)) return input;
         return input[1..^1].Trim();
     }
 
     private static bool IsWrappedInQuotes(string text)
     {
         var trimmed = text.Trim();
-        if (trimmed.Length < 2)
-        {
-            return false;
-        }
-
-        var first = trimmed[0];
-        var last = trimmed[^1];
-
-        return (first == '"' && last == '"') || (first == '“' && last == '”');
+        if (trimmed.Length < 2) return false;
+        return (trimmed[0] == '"' && trimmed[^1] == '"') || (trimmed[0] == '“' && trimmed[^1] == '”');
     }
 
     private static string NormalizeSpacing(string input)
@@ -171,102 +183,6 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
         var normalized = MultipleSpacesRegex().Replace(input, " ");
         normalized = SpaceBeforePunctuationRegex().Replace(normalized, "$1");
         return normalized.Trim();
-    }
-
-    private static List<string> GetSuspiciousReasons(string line, string sourceLine)
-    {
-        var reasons = new List<string>();
-
-        if (ContainsCjk(line))
-        {
-            reasons.Add("cjk");
-        }
-
-        if (ContainsAny(line, PromptLeakageMarkers))
-        {
-            reasons.Add("prompt_leakage");
-        }
-
-        if (ContainsAny(line, LeadingLabels))
-        {
-            reasons.Add("assistant_label");
-        }
-
-        if (HasRepeatedSegment(line))
-        {
-            reasons.Add("repeated_segment");
-        }
-
-        if (!string.IsNullOrWhiteSpace(sourceLine)
-            && line.Length > 120
-            && line.Length > sourceLine.Length * 4)
-        {
-            reasons.Add("excessive_length");
-        }
-
-        return reasons;
-    }
-
-    private static bool ContainsAny(string line, IEnumerable<string> terms)
-    {
-        var normalizedLine = NormalizeForDetection(line);
-        return terms.Any(term => normalizedLine.Contains(NormalizeForDetection(term), StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string NormalizeForDetection(string input)
-        => input.Replace("_", " ").Replace("-", " ");
-
-    private static bool ContainsCjk(string line)
-    {
-        foreach (var rune in line.EnumerateRunes())
-        {
-            var value = rune.Value;
-            if ((value >= 0x4E00 && value <= 0x9FFF)
-                || (value >= 0x3400 && value <= 0x4DBF)
-                || (value >= 0x3040 && value <= 0x30FF)
-                || (value >= 0xAC00 && value <= 0xD7AF))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasRepeatedSegment(string line)
-    {
-        var normalized = NormalizeSpacing(line);
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            return false;
-        }
-
-        var words = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length >= 4)
-        {
-            var midpoint = words.Length / 2;
-            if (words.Length % 2 == 0)
-            {
-                var firstHalf = string.Join(' ', words.Take(midpoint));
-                var secondHalf = string.Join(' ', words.Skip(midpoint));
-                if (string.Equals(firstHalf, secondHalf, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-        }
-
-        var textLength = normalized.Length;
-        for (var size = 8; size <= textLength / 2; size++)
-        {
-            var segment = normalized[..size];
-            if (normalized.StartsWith(segment + segment, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     [GeneratedRegex(@"\s{2,}")]

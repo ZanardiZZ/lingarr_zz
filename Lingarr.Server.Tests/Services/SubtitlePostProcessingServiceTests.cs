@@ -8,7 +8,7 @@ namespace Lingarr.Server.Tests.Services;
 public class SubtitlePostProcessingServiceTests
 {
     private readonly SubtitlePostProcessingService _service =
-        new(NullLogger<SubtitlePostProcessingService>.Instance);
+        new(NullLogger<SubtitlePostProcessingService>.Instance, new SubtitleQualityAnalyzer());
 
     [Theory]
     [InlineData("Translation in Portuguese: Olá", "Olá")]
@@ -62,7 +62,7 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_LogsSuspicious_WhenLineContainsCjkAfterCleaning()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
         await ProcessSingleLine("你好 mundo", "hello", service);
 
@@ -73,7 +73,7 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_LogsSuspicious_WhenPromptLeakageRemains()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
         await ProcessSingleLine("Use CONTEXT_BEFORE token", "hello", service);
 
@@ -84,7 +84,7 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_LogsSuspicious_WhenAssistantLabelRemains()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
         await ProcessSingleLine("This contains Translation in Portuguese label", "hello", service);
 
@@ -95,7 +95,7 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_LogsSuspicious_WhenRepeatedSegmentDetected()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
         await ProcessSingleLine("we go now we go now", "go");
 
@@ -106,12 +106,125 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_LogsSuspicious_WhenExcessiveLengthComparedToSource()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
         var longLine = new string('a', 121);
 
         await ProcessSingleLine(longLine, "short", service);
 
         Assert.Contains(logger.Logs, x => x.Contains("excessive_length"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenEnglishLeftoversDetected()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine("I need to find my brother right now", "I need to find my brother right now", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("possible_english_leftover"));
+    }
+
+    [Fact]
+    public async Task Process_DoesNotLogEnglishLeftover_WhenTargetLanguageIsEnglish()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine(
+            "I need to find my brother right now",
+            "I need to find my brother right now",
+            service,
+            sourceLanguage: "pt",
+            targetLanguage: "en");
+
+        Assert.DoesNotContain(logger.Logs, x => x.Contains("possible_english_leftover"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenParentheticalCueMissing()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine("Ele chegou", "(whispering) He arrived", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("missing_parenthetical_cue"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenSpeakerLabelAdded()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine("JOHN: Vamos.", "Let's go.", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("added_speaker_label"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenProperNounLikelyChanged()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine("Marta chegou agora.", "Maria arrived now.", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("changed_proper_noun"));
+    }
+
+    [Fact]
+    public async Task Process_SuppressesPerLineWarnings_AfterThreshold()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        var subtitles = Enumerable.Range(1, 30)
+            .Select(i => new SubtitleItem
+            {
+                Position = i,
+                TranslatedLines = ["检查中..."],
+                PlaintextLines = ["checking"],
+                Lines = ["checking"]
+            })
+            .ToList();
+
+        var request = new TranslationRequest
+        {
+            Id = 1,
+            Title = "test",
+            SourceLanguage = "en",
+            TargetLanguage = "pt",
+            MediaType = Lingarr.Core.Enum.MediaType.Movie,
+            Status = Lingarr.Core.Enum.TranslationStatus.Pending
+        };
+
+        await service.Process(subtitles, request, CancellationToken.None);
+
+        Assert.Contains(logger.Logs, x => x.Contains("Suppressed additional suspicious line warnings"));
+    }
+
+    [Fact]
+    public async Task Process_DoesNotLogChangedProperNoun_ForSentenceStartCapitalizationOnly()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine("Ele corre rápido.", "The boy runs fast.", service);
+
+        Assert.DoesNotContain(logger.Logs, x => x.Contains("changed_proper_noun"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenBracketCueMissing()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
+
+        await ProcessSingleLine("Ela chegou.", "[whispering] She arrived.", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("missing_parenthetical_cue"));
     }
 
     [Fact]
@@ -149,7 +262,7 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_FlagsRealWorldExample_CjkLineAsSuspicious()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
         await ProcessSingleLine("检查中...", "Checking...", service);
 
@@ -160,7 +273,7 @@ public class SubtitlePostProcessingServiceTests
     public async Task Process_FlagsRealWorldExample_TargetLineToTranslateRepetitionAsSuspicious()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
-        var service = new SubtitlePostProcessingService(logger);
+        var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
         await ProcessSingleLine(
             "A TARGET LINE TO TRANSLATE: texto A TARGET LINE TO TRANSLATE: texto A TARGET LINE TO TRANSLATE: texto",
@@ -180,7 +293,12 @@ public class SubtitlePostProcessingServiceTests
         Assert.Equal("Pelo menos terei um lugar para treinar meus saltos do penhasco.", result);
     }
 
-    private async Task<string> ProcessSingleLine(string translatedLine, string sourceLine, SubtitlePostProcessingService? service = null)
+    private async Task<string> ProcessSingleLine(
+        string translatedLine,
+        string sourceLine,
+        SubtitlePostProcessingService? service = null,
+        string sourceLanguage = "en",
+        string targetLanguage = "pt")
     {
         var subtitle = new SubtitleItem
         {
@@ -190,7 +308,15 @@ public class SubtitlePostProcessingServiceTests
             Lines = [sourceLine]
         };
 
-        var request = new TranslationRequest { Id = 123 };
+        var request = new TranslationRequest
+        {
+            Id = 123,
+            Title = "test",
+            SourceLanguage = sourceLanguage,
+            TargetLanguage = targetLanguage,
+            MediaType = Lingarr.Core.Enum.MediaType.Movie,
+            Status = Lingarr.Core.Enum.TranslationStatus.Pending
+        };
         var processor = service ?? _service;
         var result = await processor.Process([subtitle], request, CancellationToken.None);
 
