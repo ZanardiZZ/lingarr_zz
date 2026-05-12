@@ -126,6 +126,22 @@ public class SubtitlePostProcessingServiceTests
     }
 
     [Fact]
+    public async Task Process_DoesNotLogEnglishLeftover_WhenTargetLanguageIsEnglish()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine(
+            "I need to find my brother right now",
+            "I need to find my brother right now",
+            service,
+            sourceLanguage: "pt",
+            targetLanguage: "en");
+
+        Assert.DoesNotContain(logger.Logs, x => x.Contains("possible_english_leftover"));
+    }
+
+    [Fact]
     public async Task Process_LogsSuspicious_WhenParentheticalCueMissing()
     {
         var logger = new TestLogger<SubtitlePostProcessingService>();
@@ -156,6 +172,28 @@ public class SubtitlePostProcessingServiceTests
         await ProcessSingleLine("Marta chegou agora.", "Maria arrived now.", service);
 
         Assert.Contains(logger.Logs, x => x.Contains("changed_proper_noun"));
+    }
+
+    [Fact]
+    public async Task Process_DoesNotLogChangedProperNoun_ForSentenceStartCapitalizationOnly()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine("Ele corre rápido.", "The boy runs fast.", service);
+
+        Assert.DoesNotContain(logger.Logs, x => x.Contains("changed_proper_noun"));
+    }
+
+    [Fact]
+    public async Task Process_LogsSuspicious_WhenBracketCueMissing()
+    {
+        var logger = new TestLogger<SubtitlePostProcessingService>();
+        var service = new SubtitlePostProcessingService(logger);
+
+        await ProcessSingleLine("Ela chegou.", "[whispering] She arrived.", service);
+
+        Assert.Contains(logger.Logs, x => x.Contains("missing_parenthetical_cue"));
     }
 
     [Fact]
@@ -224,7 +262,12 @@ public class SubtitlePostProcessingServiceTests
         Assert.Equal("Pelo menos terei um lugar para treinar meus saltos do penhasco.", result);
     }
 
-    private async Task<string> ProcessSingleLine(string translatedLine, string sourceLine, SubtitlePostProcessingService? service = null)
+    private async Task<string> ProcessSingleLine(
+        string translatedLine,
+        string sourceLine,
+        SubtitlePostProcessingService? service = null,
+        string sourceLanguage = "en",
+        string targetLanguage = "pt")
     {
         var subtitle = new SubtitleItem
         {
@@ -234,7 +277,15 @@ public class SubtitlePostProcessingServiceTests
             Lines = [sourceLine]
         };
 
-        var request = new TranslationRequest { Id = 123 };
+        var request = new TranslationRequest
+        {
+            Id = 123,
+            Title = "test",
+            SourceLanguage = sourceLanguage,
+            TargetLanguage = targetLanguage,
+            MediaType = Lingarr.Core.Enum.MediaType.Movie,
+            Status = Lingarr.Core.Enum.TranslationStatus.Pending
+        };
         var processor = service ?? _service;
         var result = await processor.Process([subtitle], request, CancellationToken.None);
 

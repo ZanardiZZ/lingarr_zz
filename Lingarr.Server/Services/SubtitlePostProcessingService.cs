@@ -50,7 +50,10 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
 
                 subtitle.TranslatedLines[i] = cleanedLine;
 
-                var suspiciousReasons = GetSuspiciousReasons(cleanedLine, sourceLine);
+                var suspiciousReasons = GetSuspiciousReasons(
+                    cleanedLine,
+                    sourceLine,
+                    translationRequest.TargetLanguage);
                 if (suspiciousReasons.Count > 0)
                 {
                     suspiciousCount++;
@@ -173,7 +176,10 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
         return normalized.Trim();
     }
 
-    private static List<string> GetSuspiciousReasons(string line, string sourceLine)
+    private static readonly HashSet<string> NonNameLeadingWords =
+    ["I", "The", "A", "An", "We", "You", "He", "She", "They", "It", "This", "That"];
+
+    private static List<string> GetSuspiciousReasons(string line, string sourceLine, string? targetLanguage)
     {
         var reasons = new List<string>();
         var normalizedSource = NormalizeSpacing(sourceLine);
@@ -206,7 +212,7 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
             reasons.Add("excessive_length");
         }
 
-        if (HasEnglishLeftovers(normalizedLine, normalizedSource))
+        if (HasEnglishLeftovers(normalizedLine, normalizedSource, targetLanguage))
         {
             reasons.Add("possible_english_leftover");
         }
@@ -229,8 +235,13 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
         return reasons;
     }
 
-    private static bool HasEnglishLeftovers(string line, string sourceLine)
+    private static bool HasEnglishLeftovers(string line, string sourceLine, string? targetLanguage)
     {
+        if (IsEnglishLanguage(targetLanguage))
+        {
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(sourceLine))
         {
             return false;
@@ -254,13 +265,17 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
 
     private static bool HasMissingParentheticalCue(string line, string sourceLine)
     {
-        var sourceHasCue = ParentheticalCueRegex().IsMatch(sourceLine);
+        var sourceHasCue = ParentheticalCueRegex().IsMatch(sourceLine)
+            || BracketCueRegex().IsMatch(sourceLine)
+            || AsteriskCueRegex().IsMatch(sourceLine);
         if (!sourceHasCue)
         {
             return false;
         }
 
-        return !ParentheticalCueRegex().IsMatch(line);
+        return !ParentheticalCueRegex().IsMatch(line)
+            && !BracketCueRegex().IsMatch(line)
+            && !AsteriskCueRegex().IsMatch(line);
     }
 
     private static bool HasAddedSpeakerLabel(string line, string sourceLine)
@@ -277,15 +292,49 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
             return false;
         }
 
-        var sourceNames = ProperNounRegex().Matches(sourceLine).Select(m => m.Value).Distinct(StringComparer.Ordinal).ToList();
+        var sourceNames = GetLikelyNames(sourceLine);
         if (sourceNames.Count == 0)
         {
             return false;
         }
 
-        var lineNameSet = ProperNounRegex().Matches(line).Select(m => m.Value).ToHashSet(StringComparer.Ordinal);
+        var lineNameSet = GetLikelyNames(line).ToHashSet(StringComparer.Ordinal);
         var missingNames = sourceNames.Count(name => !lineNameSet.Contains(name));
         return missingNames > 0;
+    }
+
+    private static List<string> GetLikelyNames(string text)
+    {
+        var names = new List<string>();
+        foreach (Match match in ProperNounRegex().Matches(text))
+        {
+            var value = match.Value.Trim();
+            var hasWhitespace = value.Contains(' ');
+            var isAtStart = match.Index == 0;
+
+            if (!hasWhitespace && isAtStart && NonNameLeadingWords.Contains(value))
+            {
+                continue;
+            }
+
+            if (hasWhitespace || !isAtStart)
+            {
+                names.Add(value);
+            }
+        }
+
+        return names.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static bool IsEnglishLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+        {
+            return false;
+        }
+
+        var normalized = language.Trim().ToLowerInvariant();
+        return normalized is "en" or "eng" or "english";
     }
 
     private static bool ContainsAny(string line, IEnumerable<string> terms)
@@ -361,6 +410,12 @@ public partial class SubtitlePostProcessingService(ILogger<SubtitlePostProcessin
 
     [GeneratedRegex(@"\((?:[^)]{1,30})\)")]
     private static partial Regex ParentheticalCueRegex();
+
+    [GeneratedRegex(@"\[(?:[^\]]{1,30})\]")]
+    private static partial Regex BracketCueRegex();
+
+    [GeneratedRegex(@"\*(?:[^*]{1,30})\*")]
+    private static partial Regex AsteriskCueRegex();
 
     [GeneratedRegex(@"^\s*(?:[A-Z][A-Za-z]{1,20}|[A-Z]{2,20})\s*:\s+")]
     private static partial Regex SpeakerLabelRegex();
