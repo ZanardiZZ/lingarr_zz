@@ -1,15 +1,19 @@
 using Lingarr.Core.Configuration;
+using Lingarr.Core.Data;
 using Lingarr.Core.Entities;
 using Lingarr.Server.Interfaces.Services;
 using Lingarr.Server.Interfaces.Services.Translation;
 using Lingarr.Server.Models;
 using Lingarr.Server.Models.FileSystem;
 using Lingarr.Server.Services.Subtitle;
+using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace Lingarr.Server.Services;
 
 public class SubtitleSelectiveRetryService(
     ILogger<SubtitleSelectiveRetryService> logger,
+    LingarrDbContext dbContext,
     ISettingService settingService,
     ITranslationServiceFactory translationServiceFactory,
     ISubtitleQualityAnalyzer subtitleQualityAnalyzer) : ISubtitleSelectiveRetryService
@@ -66,6 +70,7 @@ public class SubtitleSelectiveRetryService(
         var retryImprovedCount = 0;
         var retryFailedCount = 0;
         var retrySkippedCount = 0;
+        var retryReasonCounts = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var subtitle in translatedSubtitles)
         {
@@ -87,6 +92,8 @@ public class SubtitleSelectiveRetryService(
                 {
                     continue;
                 }
+
+                CountReasons(retryReasonCounts, currentReasons);
 
                 var retryReasons = highSeverityOnly
                     ? currentReasons.Where(r => HighSeverityReasons.Contains(r)).ToList()
@@ -196,6 +203,15 @@ public class SubtitleSelectiveRetryService(
             retryFailedCount,
             retrySkippedCount);
 
+        await PersistRetrySummary(
+            translationRequest.Id,
+            retryAttemptedCount,
+            retryImprovedCount,
+            retryFailedCount,
+            retrySkippedCount,
+            retryReasonCounts,
+            cancellationToken);
+
         return translatedSubtitles;
     }
 
@@ -204,6 +220,40 @@ public class SubtitleSelectiveRetryService(
 
     private static int CountHighSeverity(IEnumerable<string> reasons)
         => reasons.Count(reason => HighSeverityReasons.Contains(reason));
+
+    private static void CountReasons(Dictionary<string, int> reasonCounts, IEnumerable<string> reasons)
+    {
+        foreach (var reason in reasons)
+        {
+            reasonCounts[reason] = reasonCounts.GetValueOrDefault(reason) + 1;
+        }
+    }
+
+    private async Task PersistRetrySummary(
+        int translationRequestId,
+        int attemptedCount,
+        int improvedCount,
+        int failedCount,
+        int skippedCount,
+        Dictionary<string, int> reasonCounts,
+        CancellationToken cancellationToken)
+    {
+        var request = await dbContext.TranslationRequests
+            .FirstOrDefaultAsync(r => r.Id == translationRequestId, cancellationToken);
+
+        if (request == null)
+        {
+            return;
+        }
+
+        request.SelectiveRetryAttemptedCount = attemptedCount;
+        request.SelectiveRetryImprovedCount = improvedCount;
+        request.SelectiveRetryFailedCount = failedCount;
+        request.SelectiveRetrySkippedCount = skippedCount;
+        request.SelectiveRetryReasonCountsJson = JsonSerializer.Serialize(reasonCounts);
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
 
     private static bool IsProviderAllowed(string serviceType, string providerScope)
     {

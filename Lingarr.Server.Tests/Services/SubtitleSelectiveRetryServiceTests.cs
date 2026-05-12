@@ -1,12 +1,15 @@
 using Lingarr.Core.Configuration;
+using Lingarr.Core.Data;
 using Lingarr.Core.Entities;
 using Lingarr.Server.Interfaces.Services;
 using Lingarr.Server.Interfaces.Services.Translation;
 using Lingarr.Server.Models;
 using Lingarr.Server.Models.FileSystem;
 using Lingarr.Server.Services;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using System.Text.Json;
 
 namespace Lingarr.Server.Tests.Services;
 
@@ -24,6 +27,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -47,6 +51,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -72,6 +77,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -94,6 +100,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -116,6 +123,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -151,6 +159,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -174,6 +183,7 @@ public class SubtitleSelectiveRetryServiceTests
 
         var service = new SubtitleSelectiveRetryService(
             NullLogger<SubtitleSelectiveRetryService>.Instance,
+            BuildDbContext(),
             settingService.Object,
             translationFactory.Object,
             new SubtitleQualityAnalyzer());
@@ -190,6 +200,43 @@ public class SubtitleSelectiveRetryServiceTests
         Assert.Equal(1_250, retried.StartTime);
         Assert.Equal(3_000, retried.EndTime);
         Assert.Single(retried.TranslatedLines);
+    }
+
+    [Fact]
+    public async Task RetrySuspiciousLines_PersistsReportingSummary()
+    {
+        var settings = BuildSettings();
+        var settingService = new Mock<ISettingService>();
+        settingService.Setup(s => s.GetSettings(It.IsAny<IEnumerable<string>>())).ReturnsAsync(settings);
+
+        var translationFactory = new Mock<ITranslationServiceFactory>();
+        translationFactory.Setup(f => f.CreateTranslationService("openai")).Returns(new FakeTranslationService(_ => "OlÃ¡ mundo"));
+
+        var dbContext = BuildDbContext();
+        var request = BuildRequest();
+        dbContext.TranslationRequests.Add(request);
+        await dbContext.SaveChangesAsync();
+
+        var service = new SubtitleSelectiveRetryService(
+            NullLogger<SubtitleSelectiveRetryService>.Instance,
+            dbContext,
+            settingService.Object,
+            translationFactory.Object,
+            new SubtitleQualityAnalyzer());
+
+        var subtitle = BuildSubtitle("TARGET LINE TO TRANSLATE olÃ¡", "hello world");
+        await service.RetrySuspiciousLines([subtitle], request, "openai", false, CancellationToken.None);
+
+        var savedRequest = await dbContext.TranslationRequests.SingleAsync();
+        var reasonCounts = JsonSerializer.Deserialize<Dictionary<string, int>>(
+            savedRequest.SelectiveRetryReasonCountsJson ?? "{}");
+
+        Assert.Equal(1, savedRequest.SelectiveRetryAttemptedCount.GetValueOrDefault());
+        Assert.Equal(1, savedRequest.SelectiveRetryImprovedCount.GetValueOrDefault());
+        Assert.Equal(0, savedRequest.SelectiveRetryFailedCount.GetValueOrDefault());
+        Assert.Equal(0, savedRequest.SelectiveRetrySkippedCount.GetValueOrDefault());
+        Assert.NotNull(reasonCounts);
+        Assert.Equal(1, reasonCounts["prompt_leakage"]);
     }
 
     private static Dictionary<string, string> BuildSettings(string maxAttempts = "1") => new()
@@ -210,6 +257,15 @@ public class SubtitleSelectiveRetryServiceTests
         MediaType = Lingarr.Core.Enum.MediaType.Movie,
         Status = Lingarr.Core.Enum.TranslationStatus.Pending
     };
+
+    private static LingarrDbContext BuildDbContext()
+    {
+        var options = new DbContextOptionsBuilder<LingarrDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+
+        return new LingarrDbContext(options);
+    }
 
     private static SubtitleItem BuildSubtitle(string translated, string source) => new()
     {

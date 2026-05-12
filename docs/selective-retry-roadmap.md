@@ -82,7 +82,7 @@ This roadmap documents the next steps to complete the feature, with a focus on U
 
 ---
 
-## Phase 3 — UI reporting (request detail)
+## Phase 3 — UI reporting (request detail) ✅ Implemented (May 12, 2026)
 
 ### Goals
 - Let users see if selective retry was effective.

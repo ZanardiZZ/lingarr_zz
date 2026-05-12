@@ -47,8 +47,17 @@ export interface ITranslationRequest {
 }
 
 export interface ITranslationRequestDetail extends ITranslationRequest {
+    retrySummary?: ISelectiveRetrySummary | null
     events: ITranslationRequestEvent[]
     lines: ISubtitleLineComparison[]
+}
+
+export interface ISelectiveRetrySummary {
+    attempted: number
+    improved: number
+    failed: number
+    skipped: number
+    reasonDistribution: Record<string, number>
 }
 
 export interface ITranslationRequestEvent {

@@ -20,6 +20,7 @@ public class TranslationRequestDetail
     public int Progress { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public SelectiveRetrySummary? RetrySummary { get; set; }
     public List<TranslationRequestEventDetail> Events { get; set; } = [];
     public List<TranslationRequestSubtitleLines> Lines { get; set; } = [];
 }

@@ -29,6 +29,7 @@ public class TranslationJobPostProcessingTests
             SubtitleToTranslate = "/tmp/source.en.srt",
             SourceLanguage = "en",
             TargetLanguage = "es",
+            MediaType = MediaType.Movie,
             Status = TranslationStatus.Pending,
             Title = "Test"
         };

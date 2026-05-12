@@ -13,6 +13,7 @@ using Lingarr.Server.Models.Api;
 using Lingarr.Server.Models.Batch.Response;
 using Lingarr.Server.Models.FileSystem;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -99,6 +100,7 @@ public class TranslationRequestService : ITranslationRequestService
             Progress = request.Status == TranslationStatus.Completed ? 100 : 0,
             CreatedAt = request.CreatedAt,
             UpdatedAt = request.UpdatedAt,
+            RetrySummary = BuildSelectiveRetrySummary(request),
             Events = events.Select(translationRequestEvent => new TranslationRequestEventDetail
             {
                 Id = translationRequestEvent.Id,
@@ -107,6 +109,43 @@ public class TranslationRequestService : ITranslationRequestService
                 CreatedAt = translationRequestEvent.CreatedAt
             }).ToList(),
             Lines = translationRequestLines.Count > 0 ? translationRequestLines : []
+        };
+    }
+
+    private static SelectiveRetrySummary? BuildSelectiveRetrySummary(TranslationRequest request)
+    {
+        var hasSummary = request.SelectiveRetryAttemptedCount.HasValue
+                         || request.SelectiveRetryImprovedCount.HasValue
+                         || request.SelectiveRetryFailedCount.HasValue
+                         || request.SelectiveRetrySkippedCount.HasValue
+                         || !string.IsNullOrWhiteSpace(request.SelectiveRetryReasonCountsJson);
+
+        if (!hasSummary)
+        {
+            return null;
+        }
+
+        var reasonDistribution = new Dictionary<string, int>();
+        if (!string.IsNullOrWhiteSpace(request.SelectiveRetryReasonCountsJson))
+        {
+            try
+            {
+                reasonDistribution = JsonSerializer.Deserialize<Dictionary<string, int>>(
+                    request.SelectiveRetryReasonCountsJson) ?? [];
+            }
+            catch (JsonException)
+            {
+                reasonDistribution = [];
+            }
+        }
+
+        return new SelectiveRetrySummary
+        {
+            Attempted = request.SelectiveRetryAttemptedCount ?? 0,
+            Improved = request.SelectiveRetryImprovedCount ?? 0,
+            Failed = request.SelectiveRetryFailedCount ?? 0,
+            Skipped = request.SelectiveRetrySkippedCount ?? 0,
+            ReasonDistribution = reasonDistribution
         };
     }
 

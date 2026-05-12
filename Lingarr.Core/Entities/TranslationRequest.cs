@@ -16,4 +16,9 @@ public class TranslationRequest : BaseEntity
     public DateTime? CompletedAt { get; set; }
     public string? ErrorMessage { get; set; }
     public string? StackTrace { get; set; }
+    public int? SelectiveRetryAttemptedCount { get; set; }
+    public int? SelectiveRetryImprovedCount { get; set; }
+    public int? SelectiveRetryFailedCount { get; set; }
+    public int? SelectiveRetrySkippedCount { get; set; }
+    public string? SelectiveRetryReasonCountsJson { get; set; }
 }

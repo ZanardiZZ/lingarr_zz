@@ -86,7 +86,7 @@ public class SubtitlePostProcessingServiceTests
         var logger = new TestLogger<SubtitlePostProcessingService>();
         var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
-        await ProcessSingleLine("This contains Translation in Portuguese label", "hello", service);
+        await ProcessSingleLine("This contains Translation in Portuguese: label", "hello", service);
 
         Assert.Contains(logger.Logs, x => x.Contains("assistant_label"));
     }
@@ -97,7 +97,7 @@ public class SubtitlePostProcessingServiceTests
         var logger = new TestLogger<SubtitlePostProcessingService>();
         var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
-        await ProcessSingleLine("we go now we go now", "go");
+        await ProcessSingleLine("we go now we go now", "go", service);
 
         Assert.Contains(logger.Logs, x => x.Contains("repeated_segment"));
     }
@@ -169,7 +169,7 @@ public class SubtitlePostProcessingServiceTests
         var logger = new TestLogger<SubtitlePostProcessingService>();
         var service = new SubtitlePostProcessingService(logger, new SubtitleQualityAnalyzer());
 
-        await ProcessSingleLine("Marta chegou agora.", "Maria arrived now.", service);
+        await ProcessSingleLine("EntÃ£o Marta chegou agora.", "Then Maria arrived now.", service);
 
         Assert.Contains(logger.Logs, x => x.Contains("changed_proper_noun"));
     }

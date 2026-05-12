@@ -88,6 +88,60 @@
                 </template>
             </CardComponent>
 
+            <CardComponent v-if="detail.retrySummary" title="Selective Retry">
+                <template #content>
+                    <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+                        <div
+                            v-for="metric in retryMetrics"
+                            :key="metric.label"
+                            class="rounded-md border border-accent/60 bg-primary/30 p-3">
+                            <div class="text-xs font-semibold uppercase text-secondary-content">
+                                {{ metric.label }}
+                            </div>
+                            <div class="mt-1 text-2xl font-bold text-primary-content">
+                                {{ metric.value }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <div class="rounded-md border border-accent/60 bg-primary/30 p-4">
+                            <h3 class="text-sm font-semibold text-primary-content">
+                                Reason distribution
+                            </h3>
+                            <div v-if="retryReasonRows.length > 0" class="mt-3 space-y-2">
+                                <div
+                                    v-for="reason in retryReasonRows"
+                                    :key="reason.key"
+                                    class="flex items-center justify-between gap-3 text-sm">
+                                    <span class="min-w-0 truncate text-primary-content">
+                                        {{ reason.label }}
+                                    </span>
+                                    <BadgeComponent
+                                        classes="border-accent bg-secondary text-primary-content">
+                                        {{ reason.count }}
+                                    </BadgeComponent>
+                                </div>
+                            </div>
+                            <div v-else class="mt-3 text-sm text-secondary-content">
+                                No suspicious reasons were detected.
+                            </div>
+                        </div>
+
+                        <div class="rounded-md border border-accent/60 bg-primary/30 p-4">
+                            <h3 class="text-sm font-semibold text-primary-content">
+                                Outcome explanation
+                            </h3>
+                            <p class="mt-3 text-sm leading-6 text-secondary-content">
+                                Selective retry only replaces a line when the quality checks
+                                improve. When a retry does not improve the detected issues,
+                                Lingarr keeps the previous best translation unchanged.
+                            </p>
+                        </div>
+                    </div>
+                </template>
+            </CardComponent>
+
             <CardComponent v-if="reversedLines.length > 0" title="Translated Lines">
                 <template #content>
                     <div class="hidden border-b border-accent font-bold md:grid md:grid-cols-12">
@@ -162,6 +216,38 @@ const latestPosition = ref<number>(0)
 
 const reversedLines = computed(() => (detail.value ? [...detail.value.lines].reverse() : []))
 
+const retryMetrics = computed(() => {
+    const summary = detail.value?.retrySummary
+    if (!summary) {
+        return []
+    }
+
+    return [
+        { label: 'Attempted', value: summary.attempted },
+        { label: 'Improved', value: summary.improved },
+        { label: 'Failed', value: summary.failed },
+        { label: 'Skipped', value: summary.skipped }
+    ]
+})
+
+const retryReasonRows = computed(() => {
+    const reasons = detail.value?.retrySummary?.reasonDistribution ?? {}
+    return Object.entries(reasons)
+        .map(([key, count]) => ({
+            key,
+            label: formatRetryReason(key),
+            count
+        }))
+        .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+})
+
+function formatRetryReason(reason: string) {
+    return reason
+        .split('_')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ')
+}
+
 const showProgress = computed(() => {
     if (!detail.value) {
         return false
@@ -177,6 +263,14 @@ const displayProgress = computed(() =>
     detail.value?.status === TRANSLATION_STATUS.COMPLETED ? 100 : progress.value
 )
 
+async function loadTranslationDetail() {
+    detail.value = await services.translationRequest.get<ITranslationRequestDetail>(Number(props.id))
+    progress.value = detail.value.progress ?? 0
+    if (!detail.value.lines) {
+        detail.value.lines = []
+    }
+}
+
 const handleProgress = (requestProgress: IRequestProgress) => {
     if (detail.value && requestProgress.id === detail.value.id) {
         detail.value.status = requestProgress.status
@@ -189,6 +283,9 @@ const handleProgress = (requestProgress: IRequestProgress) => {
         }
         if (requestProgress.stackTrace) {
             detail.value.stackTrace = requestProgress.stackTrace
+        }
+        if (requestProgress.completed) {
+            void loadTranslationDetail().catch(() => undefined)
         }
     }
 }
@@ -206,13 +303,7 @@ const handleLineTranslated = (line: ILineTranslated) => {
 
 onMounted(async () => {
     try {
-        detail.value = await services.translationRequest.get<ITranslationRequestDetail>(
-            Number(props.id)
-        )
-        progress.value = detail.value.progress ?? 0
-        if (!detail.value.lines) {
-            detail.value.lines = []
-        }
+        await loadTranslationDetail()
     } catch {
         detail.value = null
     } finally {
